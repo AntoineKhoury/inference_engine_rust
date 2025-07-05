@@ -3,3 +3,4 @@
 model/*
 !model/
 /build
+/model
