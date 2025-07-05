@@ -25,7 +25,12 @@ fclean: clean
 re: fclean all
 
 test:
+	@echo "Lauching tests. Ignored tests skipped. If you want to launch all tests please use 'make test_all'."
 	@cargo test
+
+test_all:
+	@echo "Lauching all test, including ignored tests."
+	@cargo test -- --show-output --include-ignored
 
 download: $(MODEL_FILE)
 
@@ -36,4 +41,4 @@ $(MODEL_FILE):
 	@echo "Téléchargement terminé."
 
 
-.PHONY: all clean fclean re test download release
+.PHONY: all clean fclean re test_all download release test
