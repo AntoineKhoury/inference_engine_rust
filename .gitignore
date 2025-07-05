@@ -2,3 +2,5 @@
 .DS_Store
 model/*
 !model/
+/build
+/model
