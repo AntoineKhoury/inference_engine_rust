@@ -1,6 +1,6 @@
-use std::{fs::File, io::{BufRead, BufReader, Read, Seek, SeekFrom}}; // To use a trait, implemented by another method, you still need to import the trait in scope in rust
+use std::{ffi::os_str::Display, fmt::Debug, fs::File, io::{BufRead, BufReader, Read, Seek, SeekFrom}}; // To use a trait, implemented by another method, you still need to import the trait in scope in rust
+use std::collections::BTreeMap;
 
-use std::collections::HashMap
 pub fn read_file(path: &str) -> Result<(), Box<dyn std::error::Error>>{
     let mut file =  File::open(path)?;
 
@@ -34,38 +34,114 @@ pub fn read_file(path: &str) -> Result<(), Box<dyn std::error::Error>>{
     println!("Metadata count is: {}", metadata_count);
 
     // Read Metadata info
-
-
-    Ok(())
-}
-
-enum ValueType{
-    Uint8 = 0,
-    Int8 = 1,
-    Uint16 = 2,
-    Int16 = 3,
-    Uint32 = 4,
-    Int32 = 5,
-    Float32 = 6,
-    Bool = 7,
-    String = 8,
-    Array = 9,
-    Uint64 = 10,
-    Int64 = 11,
-    Float64 = 12,
-}
-
-
-pub fn get_kv_metadata<R: BufRead>(reader: &R, pos: u64, kv_count: u64) -> Result<BTreeMap<&str, ValueType>, Box<dyn std::error::Error>>{
-    let mut kv:std::collections::BTreeMap<&str, ValueType> = std::collections::BTreeMap::new();
+    let mut reader = BufReader::new(file);
+    let metadata_start: u64 = 24;
+    let mut kv = get_kv_metadata(&mut reader, &metadata_start, metadata_count).unwrap();
+    let first_entry = kv.first_entry();
+    println!("First Metadata value is: {:?}", &first_entry);
 
     Ok(())
 }
 
-pub fn get_kv_pair<R: BufRead>(reader: &R, pos: u64) -> Result<(&str, ValueType), Box<dyn std::error::Error>>{
+#[derive(Debug)]
+enum Value {
+    Uint8(u8),
+    Int8(i8),
+    Uint16(u16),
+    Int16(i16),
+    Uint32(u32),
+    Int32(i32),
+    Float32(f32),
+    Bool(bool),
+    String(String),
+    Array(Vec<Value>),
+    Uint64(u64),
+    Int64(i64),
+    Float64(f64),
+}
+
+
+#[derive(Debug)]
+enum ValueType {
+    Uint8,
+    Int8,
+    Uint16,
+    Int16,
+    Uint32,
+    Int32,
+    Float32,
+    Bool,
+    String,
+    Array,
+    Uint64,
+    Int64,
+    Float64,
+}
+
+
+pub fn get_kv_metadata<R: BufRead + Seek>(reader: &mut R, pos: &u64, kv_count: u64) -> Result<BTreeMap<String, Value>, Box<dyn std::error::Error>>{
+    let mut kv:std::collections::BTreeMap<String, Value> = std::collections::BTreeMap::new();
+    let start_bit = 24;
+
+    for i in 0..1{
+        let (key, val) = get_kv_pair(reader,pos).expect("Couldnt get the key val pair");
+        println!("Key val pair is: {:?}", (&key,&val));
+        kv.insert(key, val);
+    }
+    Ok(kv)
+}
+
+pub fn get_kv_pair<R: BufRead + Seek>(reader: &mut R, pos: &u64) -> Result<(String, Value), Box<dyn std::error::Error>>{
     // Read bits ok the key, then read bits of the value with the type, so that you can read properly the coming type
-    
+    let (key,next_start) = get_k(reader, pos).expect("Couldn't get the k value");
+    let value_type = get_value_type(reader, &next_start).expect("Couldnt get the value type");
+    println!("Value type is: {:?}", value_type);
+    Ok((key,Value::Bool(false)))
+}
+
+pub fn get_k<R: BufRead + Seek>(reader: &mut R, pos: &u64) -> Result<(String,u64), Box< dyn std::error::Error>>{
+    let key_len_bytes = extract_bytes_from_reader(reader, pos, 8)?;
+    println!("Key len bytes: {:?}", key_len_bytes);
+    let key_len = u64::from_le_bytes(key_len_bytes.try_into().expect("Couldnt read key length"));
+    let key_pos = pos + 8;
+    let key_as_bytes = extract_bytes_from_reader(reader, &key_pos, key_len.try_into().expect("Couldnt convert vec of bytes into array"))?;
+    let key = String::from_utf8(key_as_bytes)?;
+    let next_position = key_pos + key_len;
+    Ok((key,next_position))
+}
+
+pub fn get_value_type<R: BufRead + Seek>(reader: &mut R, pos: &u64) -> Result<ValueType, Box<dyn std::error::Error>>{
+    let value_type_bytes = extract_bytes_from_reader(reader, pos, 4).expect("Couldnt get value_type bytes.");
+    let value_type: ValueType = match u32::from_le_bytes(value_type_bytes.try_into().unwrap()){
+        0 => ValueType::Uint8,
+        1 => ValueType::Int8,
+        2 => ValueType::Uint16,
+        3 => ValueType::Int16,
+        4 => ValueType::Uint32,
+        5 => ValueType::Int32,
+        6 => ValueType::Float32,
+        7 => ValueType::Bool,
+        8 => ValueType::String,
+        9 => ValueType::Array,
+        10 => ValueType::Uint64,
+        11 => ValueType::Int64,
+        12 => ValueType::Float64,
+        _ => return Err("Unknown value type code".into()),
+    };
+    Ok(value_type)
+}
+
+/*
+pub fn get_value<R: BufRead + Seek>(reader: &mut R, pos: u64) -> Result<Value, Box< dyn std::error::Error>>{
     Ok(())
+} */
+
+
+pub fn extract_bytes_from_reader<R: BufRead + Seek>(reader: &mut R, start_pos: &u64, size: usize) -> Result<Vec<u8>, Box<dyn std::error::Error>>{
+    let mut vec = vec![0u8; size];
+    reader.seek(SeekFrom::Start(*start_pos))?;
+    reader.read_exact(&mut vec);
+    Ok(vec)
 }
 
 pub fn extract_bytes_from_file(file: &File, start_pos: u64, size: usize) -> Result<Vec<u8>, Box<dyn std::error::Error>>{
