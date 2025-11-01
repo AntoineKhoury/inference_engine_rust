@@ -16,7 +16,7 @@ pub fn read_file(path: &str) -> Result<(), Box<dyn std::error::Error>>{
     start = 4;
     size = 4;
     let version_bytes = extract_bytes_from_file(&file, start, size)?;
-    let version_as_number = u32::from_le_bytes(version_bytes.try_into().unwrap()); // Here, unwrap consumes the value in the Ok, and will panic if error, try_into is used to convert from a vec to an array
+    let version_as_number = u32::from_le_bytes(version_bytes.try_into().unwrap()); // Here, unwrap consumes the Data in the Ok, and will panic if error, try_into is used to convert from a vec to an array
     println!("Version is: {}", version_as_number);
 
     // Read Tensor Count
@@ -38,13 +38,13 @@ pub fn read_file(path: &str) -> Result<(), Box<dyn std::error::Error>>{
     let metadata_start: u64 = 24;
     let mut kv = get_kv_metadata(&mut reader, &metadata_start, metadata_count).unwrap();
     let first_entry = kv.first_entry();
-    println!("First Metadata value is: {:?}", &first_entry);
+    println!("First Metadata Data is: {:?}", &first_entry);
 
     Ok(())
 }
 
 #[derive(Debug)]
-enum Value {
+enum Data {
     Uint8(u8),
     Int8(i8),
     Uint16(u16),
@@ -54,7 +54,7 @@ enum Value {
     Float32(f32),
     Bool(bool),
     String(String),
-    Array(Vec<Value>),
+    Array(Vec<Data>),
     Uint64(u64),
     Int64(i64),
     Float64(f64),
@@ -62,7 +62,7 @@ enum Value {
 
 
 #[derive(Debug)]
-enum ValueType {
+enum DataType {
     Uint8,
     Int8,
     Uint16,
@@ -78,9 +78,38 @@ enum ValueType {
     Float64,
 }
 
+struct ReadingInfo{
+    data_type: DataType,
+    raw_bytes: Vec<u8>
+}
 
-pub fn get_kv_metadata<R: BufRead + Seek>(reader: &mut R, pos: &u64, kv_count: u64) -> Result<BTreeMap<String, Value>, Box<dyn std::error::Error>>{
-    let mut kv:std::collections::BTreeMap<String, Value> = std::collections::BTreeMap::new();
+// Implement a method to convert a vector of bytes into the correct target type
+// This method will be used to convert to the correct type everytime
+impl TryFrom<ReadingInfo> for Data{
+    fn try_from(reading_info: ReadingInfo) -> Result<Self, Self::Error> {
+        // Based on the data_type, define the right policy to read the bytes
+        match reading_info.data_type{
+            DataType::Uint8 =>,
+            DataType::Int8 =>,
+            DataType::Uint16 => ,
+            DataType::Int16 => ,
+            DataType::Uint32 => ,
+            DataType::Int32 => ,
+            DataType::Float32 =>,
+            DataType::Bool =>,
+            DataType::String =>,
+            DataType::Array => ,
+            DataType::Uint64 =>,
+            DataType::Int64 =>,
+            DataType::Float64 =>,
+            _ => panic!("Data type not available yet.")
+        }
+    }
+}
+
+
+pub fn get_kv_metadata<R: BufRead + Seek>(reader: &mut R, pos: &u64, kv_count: u64) -> Result<BTreeMap<String, Data>, Box<dyn std::error::Error>>{
+    let mut kv:std::collections::BTreeMap<String, Data> = std::collections::BTreeMap::new();
     let start_bit = 24;
 
     for i in 0..1{
@@ -91,12 +120,12 @@ pub fn get_kv_metadata<R: BufRead + Seek>(reader: &mut R, pos: &u64, kv_count: u
     Ok(kv)
 }
 
-pub fn get_kv_pair<R: BufRead + Seek>(reader: &mut R, pos: &u64) -> Result<(String, Value), Box<dyn std::error::Error>>{
-    // Read bits ok the key, then read bits of the value with the type, so that you can read properly the coming type
+pub fn get_kv_pair<R: BufRead + Seek>(reader: &mut R, pos: &u64) -> Result<(String, Data), Box<dyn std::error::Error>>{
+    // Read bits ok the key, then read bits of the Data with the type, so that you can read properly the coming type
     let (key,next_start) = get_k(reader, pos).expect("Couldn't get the k value");
     let value_type = get_value_type(reader, &next_start).expect("Couldnt get the value type");
     println!("Value type is: {:?}", value_type);
-    Ok((key,Value::Bool(false)))
+    Ok((key,Data::Bool(false)))
 }
 
 pub fn get_k<R: BufRead + Seek>(reader: &mut R, pos: &u64) -> Result<(String,u64), Box< dyn std::error::Error>>{
@@ -110,29 +139,29 @@ pub fn get_k<R: BufRead + Seek>(reader: &mut R, pos: &u64) -> Result<(String,u64
     Ok((key,next_position))
 }
 
-pub fn get_value_type<R: BufRead + Seek>(reader: &mut R, pos: &u64) -> Result<ValueType, Box<dyn std::error::Error>>{
+pub fn get_value_type<R: BufRead + Seek>(reader: &mut R, pos: &u64) -> Result<DataType, Box<dyn std::error::Error>>{
     let value_type_bytes = extract_bytes_from_reader(reader, pos, 4).expect("Couldnt get value_type bytes.");
-    let value_type: ValueType = match u32::from_le_bytes(value_type_bytes.try_into().unwrap()){
-        0 => ValueType::Uint8,
-        1 => ValueType::Int8,
-        2 => ValueType::Uint16,
-        3 => ValueType::Int16,
-        4 => ValueType::Uint32,
-        5 => ValueType::Int32,
-        6 => ValueType::Float32,
-        7 => ValueType::Bool,
-        8 => ValueType::String,
-        9 => ValueType::Array,
-        10 => ValueType::Uint64,
-        11 => ValueType::Int64,
-        12 => ValueType::Float64,
+    let value_type: DataType = match u32::from_le_bytes(value_type_bytes.try_into().unwrap()){
+        0 => DataType::Uint8,
+        1 => DataType::Int8,
+        2 => DataType::Uint16,
+        3 => DataType::Int16,
+        4 => DataType::Uint32,
+        5 => DataType::Int32,
+        6 => DataType::Float32,
+        7 => DataType::Bool,
+        8 => DataType::String,
+        9 => DataType::Array,
+        10 => DataType::Uint64,
+        11 => DataType::Int64,
+        12 => DataType::Float64,
         _ => return Err("Unknown value type code".into()),
     };
     Ok(value_type)
 }
 
 /*
-pub fn get_value<R: BufRead + Seek>(reader: &mut R, pos: u64) -> Result<Value, Box< dyn std::error::Error>>{
+pub fn get_value<R: BufRead + Seek>(reader: &mut R, pos: u64) -> Result<Data, Box< dyn std::error::Error>>{
     Ok(())
 } */
 
