@@ -72,6 +72,11 @@ impl Tensor {
             mins,
         }
     }
+    
+    /// Get tensor dimensions
+    pub fn dimensions(&self) -> &[u64] {
+        &self.dimensions
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -154,19 +159,46 @@ impl GGUFData {
     
     /// Load all tensors from the GGUF file
     /// Opens the file, reads tensor data based on tensors_metadata, and populates the tensors HashMap
+    /// Uses a larger buffer (1MB) for better I/O performance
     pub fn load_tensors(&mut self, file_path: &str) -> Result<(), Box<dyn std::error::Error>> {
         use crate::model_loader::file_loader::tensor_loader::load_tensor;
         use std::fs::File;
         use std::io::BufReader;
+        use log::info;
         
         let file = File::open(file_path)?;
-        let mut reader = crate::model_loader::file_loader::io::Reader::new(BufReader::new(file), 0);
+        // Use larger buffer (1MB) instead of default 8KB for better I/O performance
+        let buf_reader = BufReader::with_capacity(1024 * 1024, file);
+        let mut reader = crate::model_loader::file_loader::io::Reader::new(buf_reader, 0);
         
-        for tensor_info in &self.tensors_metadata {
+        let total_tensors = self.tensors_metadata.len();
+        info!("Starting to load {} tensors...", total_tensors);
+        
+        for (idx, tensor_info) in self.tensors_metadata.iter().enumerate() {
+            let progress = ((idx + 1) * 100) / total_tensors;
+            info!("Loading tensor {}/{} ({}%): {}", 
+                  idx + 1, total_tensors, progress, tensor_info.name);
+            
             let tensor = load_tensor(&mut reader, tensor_info)?;
             self.tensors.insert(tensor_info.name.clone(), tensor);
         }
         
+        info!("Successfully loaded all {} tensors", total_tensors);
         Ok(())
+    }
+    
+    /// Get a tensor by name
+    pub fn get_tensor(&self, name: &str) -> Option<&Tensor> {
+        self.tensors.get(name)
+    }
+    
+    /// Get the number of loaded tensors
+    pub fn num_tensors(&self) -> usize {
+        self.tensors.len()
+    }
+    
+    /// Get tensor metadata (for testing/debugging)
+    pub fn tensors_metadata(&self) -> &[TensorInfo] {
+        &self.tensors_metadata
     }
 }

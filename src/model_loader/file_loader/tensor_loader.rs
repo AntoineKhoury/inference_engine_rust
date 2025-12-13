@@ -66,9 +66,10 @@ fn load_q4k_tensor<R: BufRead + Seek>(
     num_elements: usize,
 ) -> Result<Tensor, Box<dyn std::error::Error>> {
     // Q4_K: 256 weights per superblock, 160 bytes per superblock
-    // 128 bytes quantized data + 16 bytes scales + 16 bytes mins
+    // 128 bytes quantized data + 16 bytes scales (8 scales) + 16 bytes mins (8 mins)
+    // Scales/mins are stored per superblock (8 per superblock), not per block
     let num_superblocks = (num_elements + 255) / 256; // Round up
-    let num_blocks = (num_elements + 31) / 32; // Round up for scales/mins
+    let num_scales_mins = num_superblocks * 8; // 8 scales/mins per superblock
     
     // Read all packed data
     let packed_data_size = num_superblocks * 128;
@@ -85,15 +86,15 @@ fn load_q4k_tensor<R: BufRead + Seek>(
     // Trim to exact num_elements (in case of rounding)
     quantized_data.truncate(num_elements);
     
-    // Read scales (f16, one per block of 32 weights)
-    let mut scales = Vec::with_capacity(num_blocks);
-    for _ in 0..num_blocks {
+    // Read scales (f16, 8 per superblock)
+    let mut scales = Vec::with_capacity(num_scales_mins);
+    for _ in 0..num_scales_mins {
         scales.push(reader.read_f16()?);
     }
     
-    // Read mins (f16, one per block of 32 weights)
-    let mut mins = Vec::with_capacity(num_blocks);
-    for _ in 0..num_blocks {
+    // Read mins (f16, 8 per superblock)
+    let mut mins = Vec::with_capacity(num_scales_mins);
+    for _ in 0..num_scales_mins {
         mins.push(reader.read_f16()?);
     }
     
@@ -105,10 +106,10 @@ fn load_q4k_tensor<R: BufRead + Seek>(
         ).into());
     }
     
-    if scales.len() != num_blocks || mins.len() != num_blocks {
+    if scales.len() != num_scales_mins || mins.len() != num_scales_mins {
         return Err(format!(
-            "Q4_K tensor {}: expected {} blocks for scales/mins, got {}/{}",
-            tensor_info.name, num_blocks, scales.len(), mins.len()
+            "Q4_K tensor {}: expected {} scales/mins ({} superblocks × 8), got {}/{}",
+            tensor_info.name, num_scales_mins, num_superblocks, scales.len(), mins.len()
         ).into());
     }
     
@@ -132,9 +133,10 @@ fn load_q6k_tensor<R: BufRead + Seek>(
     num_elements: usize,
 ) -> Result<Tensor, Box<dyn std::error::Error>> {
     // Q6_K: 256 weights per superblock, 208 bytes per superblock
-    // 192 bytes quantized data + 16 bytes scales + 16 bytes mins
+    // 192 bytes quantized data + 16 bytes scales (8 scales) + 16 bytes mins (8 mins)
+    // Scales/mins are stored per superblock (8 per superblock), not per block
     let num_superblocks = (num_elements + 255) / 256; // Round up
-    let num_blocks = (num_elements + 31) / 32; // Round up for scales/mins
+    let num_scales_mins = num_superblocks * 8; // 8 scales/mins per superblock
     
     // Read all packed data
     let packed_data_size = num_superblocks * 192;
@@ -168,15 +170,15 @@ fn load_q6k_tensor<R: BufRead + Seek>(
         i += 3;
     }
     
-    // Read scales (f16, one per block of 32 weights)
-    let mut scales = Vec::with_capacity(num_blocks);
-    for _ in 0..num_blocks {
+    // Read scales (f16, 8 per superblock)
+    let mut scales = Vec::with_capacity(num_scales_mins);
+    for _ in 0..num_scales_mins {
         scales.push(reader.read_f16()?);
     }
     
-    // Read mins (f16, one per block of 32 weights)
-    let mut mins = Vec::with_capacity(num_blocks);
-    for _ in 0..num_blocks {
+    // Read mins (f16, 8 per superblock)
+    let mut mins = Vec::with_capacity(num_scales_mins);
+    for _ in 0..num_scales_mins {
         mins.push(reader.read_f16()?);
     }
     
@@ -188,10 +190,10 @@ fn load_q6k_tensor<R: BufRead + Seek>(
         ).into());
     }
     
-    if scales.len() != num_blocks || mins.len() != num_blocks {
+    if scales.len() != num_scales_mins || mins.len() != num_scales_mins {
         return Err(format!(
-            "Q6_K tensor {}: expected {} blocks for scales/mins, got {}/{}",
-            tensor_info.name, num_blocks, scales.len(), mins.len()
+            "Q6_K tensor {}: expected {} scales/mins ({} superblocks × 8), got {}/{}",
+            tensor_info.name, num_scales_mins, num_superblocks, scales.len(), mins.len()
         ).into());
     }
     

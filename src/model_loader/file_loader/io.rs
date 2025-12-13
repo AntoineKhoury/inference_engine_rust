@@ -28,7 +28,8 @@ impl<R: BufRead + Seek> Reader<R> {
 
     pub fn read_bytes(&mut self, size: u64) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
         let mut vec = vec![0u8; size as usize];
-        self.buffer.seek(SeekFrom::Start(self.pos))?;
+        // Read sequentially - BufReader handles buffering automatically
+        // No seek needed for sequential reads (seeking invalidates the buffer!)
         self.buffer.read_exact(&mut vec)?;
         self.pos += size;
         Ok(vec)
