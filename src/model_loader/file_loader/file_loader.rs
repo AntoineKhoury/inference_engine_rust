@@ -22,9 +22,11 @@ pub fn read_file(path: &str) -> Result<(), Box<dyn std::error::Error>>{
     // Read Metadata Count, 8 bytes long
     let metadata_count = reader.read_u64()?;
     println!("Metadata count is: {}", metadata_count);
+    
 
     // Read metadata tree
     let mut kv = get_kv_metadata(&mut reader, metadata_count).unwrap();
+    //println!("Metadata: {:?}", kv);
 
     // Read tensors
     let tensors_metadata = get_tensors_metadata(&mut reader, tensor_count)?;
@@ -44,6 +46,6 @@ mod test{
     use super::*; // This is used to have access to functions outside the module
     #[test]
     fn test_file_read(){ // Test functions can't have parameters
-        let _result = read_file("./model/qwen2.5-7b-instruct-q4_0.gguf");
+        let _result = read_file("./model/mistral-7b-v0.1.Q4_K_M.gguf");
     }
 }

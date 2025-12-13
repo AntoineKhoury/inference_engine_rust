@@ -1,5 +1,78 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
+/// Tensor type identifier - public for zero-overhead kernel dispatch
+/// Used by inference kernels to select the appropriate SIMD operations
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TensorType {
+    /// Unquantized float32 tensors (used for layer normalization weights)
+    F32,
+    /// 4-bit quantization, unpacked to u8 (values 0-15)
+    Q4K,
+    /// 6-bit quantization, unpacked to u8 (values 0-63)
+    Q6K,
+}
+
+/// Loaded tensor with all data unpacked and ready for SIMD operations
+/// Immutable by design - all fields except tensor_type are private
+#[derive(Debug)]
+pub struct Tensor {
+    /// Public field for zero-overhead type checking in kernels
+    pub tensor_type: TensorType,
+    
+    /// Tensor name (e.g., "blk.0.attn_q.weight")
+    name: String,
+    
+    /// Tensor dimensions (e.g., [4096, 4096] for 2D matrix)
+    dimensions: Vec<u64>,
+    
+    /// Total number of elements (product of dimensions)
+    num_elements: usize,
+    
+    /// For F32: Raw float32 values (row-major order)
+    /// For Q4K/Q6K: None
+    f32_data: Option<Vec<f32>>,
+    
+    /// For Q4K/Q6K: Unpacked quantized values as u8
+    /// Q4K: values in range 0-15
+    /// Q6K: values in range 0-63
+    /// For F32: None
+    quantized_data: Option<Vec<u8>>,
+    
+    /// For Q4K/Q6K: Scale factors (one f32 per block of 32 weights)
+    /// Length: num_elements / 32
+    /// For F32: None
+    scales: Option<Vec<f32>>,
+    
+    /// For Q4K/Q6K: Minimum values (one f32 per block of 32 weights)
+    /// Length: num_elements / 32
+    /// For F32: None
+    mins: Option<Vec<f32>>,
+}
+
+impl Tensor {
+    /// Create a new Tensor (constructor for tensor_loader module)
+    pub(crate) fn new(
+        tensor_type: TensorType,
+        name: String,
+        dimensions: Vec<u64>,
+        num_elements: usize,
+        f32_data: Option<Vec<f32>>,
+        quantized_data: Option<Vec<u8>>,
+        scales: Option<Vec<f32>>,
+        mins: Option<Vec<f32>>,
+    ) -> Self {
+        Self {
+            tensor_type,
+            name,
+            dimensions,
+            num_elements,
+            f32_data,
+            quantized_data,
+            scales,
+            mins,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum Data {
@@ -54,7 +127,11 @@ pub struct GGUFData {
     nb_tensors: u64,
     nb_key_vals: u64,
     kv: BTreeMap<String, Data>,
-    tensors_metadata: Vec<TensorInfo>
+    /// Tensor metadata (offsets, type_ids) - used during loading process
+    tensors_metadata: Vec<TensorInfo>,
+    /// Loaded tensors: HashMap keyed by tensor name
+    /// Populated during tensor loading phase
+    tensors: HashMap<String, Tensor>,
 }
 
 impl GGUFData {
@@ -71,6 +148,25 @@ impl GGUFData {
             nb_key_vals,
             kv,
             tensors_metadata,
+            tensors: HashMap::new(),
         }
+    }
+    
+    /// Load all tensors from the GGUF file
+    /// Opens the file, reads tensor data based on tensors_metadata, and populates the tensors HashMap
+    pub fn load_tensors(&mut self, file_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+        use crate::model_loader::file_loader::tensor_loader::load_tensor;
+        use std::fs::File;
+        use std::io::BufReader;
+        
+        let file = File::open(file_path)?;
+        let mut reader = crate::model_loader::file_loader::io::Reader::new(BufReader::new(file), 0);
+        
+        for tensor_info in &self.tensors_metadata {
+            let tensor = load_tensor(&mut reader, tensor_info)?;
+            self.tensors.insert(tensor_info.name.clone(), tensor);
+        }
+        
+        Ok(())
     }
 }
