@@ -15,7 +15,9 @@ pub fn load_tensor<R: BufRead + Seek>(
         .product::<u64>() as usize;
 
     // Seek to the tensor's offset
-    reader.seek(tensor_info.offset)?;
+    reader.seek(tensor_info.offset)
+        .map_err(|e| format!("Failed to seek to offset {} for tensor '{}': {}", 
+                             tensor_info.offset, tensor_info.name, e))?;
 
     // Load based on type_id
     match tensor_info.type_id {
@@ -59,57 +61,85 @@ fn load_f32_tensor<R: BufRead + Seek>(
 }
 
 /// Load Q4_K tensor (4-bit quantization)
-/// Unpacks 4-bit values to u8 (0-15) and converts f16 scales/mins to f32
+/// Format: 144 bytes per superblock (256 elements)
+/// Structure: 4 bytes dm (2 half floats) + 12 bytes scales (packed 6-bit) + 128 bytes qs (quantized values)
 fn load_q4k_tensor<R: BufRead + Seek>(
     reader: &mut Reader<R>,
     tensor_info: &TensorInfo,
     num_elements: usize,
 ) -> Result<Tensor, Box<dyn std::error::Error>> {
-    // Q4_K: 256 weights per superblock, 160 bytes per superblock
-    // 128 bytes quantized data + 16 bytes scales (8 scales) + 16 bytes mins (8 mins)
-    // Scales/mins are stored per superblock (8 per superblock), not per block
-    let num_superblocks = (num_elements + 255) / 256; // Round up
-    let num_scales_mins = num_superblocks * 8; // 8 scales/mins per superblock
+    // Q4_K: 256 weights per superblock, 144 bytes per superblock
+    // Structure: 4 bytes dm + 12 bytes scales + 128 bytes qs
+    const BLOCK_SIZE: usize = 144;
+    const ELEMENTS_PER_BLOCK: usize = 256;
+    const ELEMENTS_PER_SUB_BLOCK: usize = 32;
     
-    // Read all packed data
-    let packed_data_size = num_superblocks * 128;
-    let packed_data = reader.read_bytes(packed_data_size as u64)?;
+    let num_superblocks = (num_elements + ELEMENTS_PER_BLOCK - 1) / ELEMENTS_PER_BLOCK; // Round up
+    let total_bytes = num_superblocks * BLOCK_SIZE;
     
-    // Unpack 4-bit values to u8
-    // Each byte contains 2 values: lower 4 bits and upper 4 bits
+    // Read entire superblock data
+    let block_data = reader.read_bytes(total_bytes as u64)
+        .map_err(|e| format!("Q4_K tensor '{}': Failed to read {} bytes at offset {}: {}", 
+                             tensor_info.name, total_bytes, tensor_info.offset, e))?;
+    
+    // Extract quantized values, scales, and mins
     let mut quantized_data = Vec::with_capacity(num_elements);
-    for byte in &packed_data {
-        quantized_data.push(byte & 0x0F);  // Lower 4 bits (0-15)
-        quantized_data.push(byte >> 4);    // Upper 4 bits (0-15)
+    let mut scales = Vec::with_capacity(num_superblocks * 8); // 8 sub-blocks per superblock
+    let mut mins = Vec::with_capacity(num_superblocks * 8);
+    
+    // Process each superblock
+    for block_idx in 0..num_superblocks {
+        let block_start = block_idx * BLOCK_SIZE;
+        
+        // Read dm (4 bytes: 2 half floats)
+        let d = f16_to_f32(u16::from_le_bytes([
+            block_data[block_start],
+            block_data[block_start + 1],
+        ]));
+        let dmin = f16_to_f32(u16::from_le_bytes([
+            block_data[block_start + 2],
+            block_data[block_start + 3],
+        ]));
+        
+        // Read scales array (12 bytes)
+        let scales_start = block_start + 4;
+        let scales_bytes = &block_data[scales_start..scales_start + 12];
+        
+        // Extract scales and mins for 8 sub-blocks (6 bits each)
+        for sub_block_idx in 0..8 {
+            let (scale_6bit, min_6bit) = extract_scale_min_k4(sub_block_idx, scales_bytes);
+            
+            // Reconstruct actual scale and min: actual = dm * quantized_value
+            // We store the 6-bit quantized values and dm separately for dequantization
+            scales.push(d * scale_6bit as f32);
+            mins.push(dmin * min_6bit as f32);
+        }
+        
+        // Read quantized values (128 bytes = 256 values, 4 bits each)
+        let qs_start = block_start + 16;
+        let qs_bytes = &block_data[qs_start..qs_start + 128];
+        
+        // Extract quantized values according to the group-of-64 layout
+        for element_pos in 0..ELEMENTS_PER_BLOCK {
+            if quantized_data.len() >= num_elements {
+                break;
+            }
+            
+            let quantized = get_quantized_value_q4k(element_pos, qs_bytes);
+            quantized_data.push(quantized);
+        }
     }
     
-    // Trim to exact num_elements (in case of rounding)
+    // Trim to exact num_elements
     quantized_data.truncate(num_elements);
-    
-    // Read scales (f16, 8 per superblock)
-    let mut scales = Vec::with_capacity(num_scales_mins);
-    for _ in 0..num_scales_mins {
-        scales.push(reader.read_f16()?);
-    }
-    
-    // Read mins (f16, 8 per superblock)
-    let mut mins = Vec::with_capacity(num_scales_mins);
-    for _ in 0..num_scales_mins {
-        mins.push(reader.read_f16()?);
-    }
+    scales.truncate((num_elements + ELEMENTS_PER_SUB_BLOCK - 1) / ELEMENTS_PER_SUB_BLOCK);
+    mins.truncate((num_elements + ELEMENTS_PER_SUB_BLOCK - 1) / ELEMENTS_PER_SUB_BLOCK);
     
     // Validate
     if quantized_data.len() != num_elements {
         return Err(format!(
             "Q4_K tensor {}: expected {} quantized elements, got {}",
             tensor_info.name, num_elements, quantized_data.len()
-        ).into());
-    }
-    
-    if scales.len() != num_scales_mins || mins.len() != num_scales_mins {
-        return Err(format!(
-            "Q4_K tensor {}: expected {} scales/mins ({} superblocks × 8), got {}/{}",
-            tensor_info.name, num_scales_mins, num_superblocks, scales.len(), mins.len()
         ).into());
     }
     
@@ -125,75 +155,176 @@ fn load_q4k_tensor<R: BufRead + Seek>(
     ))
 }
 
+/// Extract scale and min for sub-block j (0-7) from packed scales array (12 bytes)
+/// Returns: (scale_6bit, min_6bit) both as u8 values (0-63)
+/// Based on the Q4_K packing scheme from GGML specification
+fn extract_scale_min_k4(j: usize, scales: &[u8]) -> (u8, u8) {
+    if j < 4 {
+        // For sub-blocks 0-3: simple extraction
+        // scales[j] contains scale (6 bits), scales[j+4] contains min (6 bits)
+        let scale = scales[j] & 0x3F; // 6 bits (0-63)
+        let min_val = scales[j + 4] & 0x3F; // 6 bits (0-63)
+        (scale, min_val)
+    } else {
+        // For sub-blocks 4-7: complex packing
+        // scales[j+4] contains low 4 bits of both scale and min
+        let low_bits = scales[j + 4];
+        let scale_low = low_bits & 0x0F; // Low 4 bits of scale
+        let min_low = (low_bits >> 4) & 0x0F; // Low 4 bits of min
+        
+        // High 2 bits are stored in scales[j-4] and scales[j] (bits 6-7)
+        let scale_high = (scales[j - 4] >> 6) & 0x03; // High 2 bits of scale
+        let min_high = (scales[j] >> 6) & 0x03; // High 2 bits of min (j-0 = j)
+        
+        // Combine: 6-bit value = low 4 bits | (high 2 bits << 4)
+        let scale = scale_low | (scale_high << 4);
+        let min_val = min_low | (min_high << 4);
+        (scale, min_val)
+    }
+}
+
+/// Get quantized value (0-15) for element at position pos (0-255) from qs array
+/// Layout: organized in groups of 64 elements
+fn get_quantized_value_q4k(pos: usize, qs: &[u8]) -> u8 {
+    let group = pos / 64; // Which group of 64 (0-3)
+    let offset_in_group = pos % 64; // Position within group (0-63)
+    let byte_idx = group * 32 + (offset_in_group % 32);
+    let nibble = offset_in_group / 32; // 0 = low nibble, 1 = high nibble
+    
+    let byte = qs[byte_idx];
+    if nibble == 0 {
+        byte & 0x0F // Low 4 bits
+    } else {
+        (byte >> 4) & 0x0F // High 4 bits
+    }
+}
+
+/// Convert half-precision float (f16) to f32
+/// Helper function for reading dm values
+fn f16_to_f32(bits: u16) -> f32 {
+    let sign = (bits >> 15) & 0x1;
+    let exponent = (bits >> 10) & 0x1F;
+    let mantissa = bits & 0x3FF;
+    
+    if exponent == 0 {
+        if mantissa == 0 {
+            if sign == 0 { 0.0 } else { -0.0 }
+        } else {
+            // Subnormal
+            let value = (mantissa as f32) / 1024.0 * 2.0_f32.powi(-14);
+            if sign == 0 { value } else { -value }
+        }
+    } else if exponent == 0x1F {
+        if mantissa == 0 {
+            if sign == 0 { f32::INFINITY } else { f32::NEG_INFINITY }
+        } else {
+            f32::NAN
+        }
+    } else {
+        // Normalized
+        let exp = (exponent as i32) - 15;
+        let mant = 1.0 + (mantissa as f32) / 1024.0;
+        let value = mant * 2.0_f32.powi(exp);
+        if sign == 0 { value } else { -value }
+    }
+}
+
 /// Load Q6_K tensor (6-bit quantization)
-/// Unpacks 6-bit values to u8 (0-63) and converts f16 scales/mins to f32
+/// Format: 208 bytes per superblock (256 elements)
+/// Structure: 4 bytes dm (2 half floats) + 12 bytes scales (packed 6-bit) + 192 bytes qs (quantized values)
 fn load_q6k_tensor<R: BufRead + Seek>(
     reader: &mut Reader<R>,
     tensor_info: &TensorInfo,
     num_elements: usize,
 ) -> Result<Tensor, Box<dyn std::error::Error>> {
     // Q6_K: 256 weights per superblock, 208 bytes per superblock
-    // 192 bytes quantized data + 16 bytes scales (8 scales) + 16 bytes mins (8 mins)
-    // Scales/mins are stored per superblock (8 per superblock), not per block
-    let num_superblocks = (num_elements + 255) / 256; // Round up
-    let num_scales_mins = num_superblocks * 8; // 8 scales/mins per superblock
+    // Structure: 4 bytes dm + 12 bytes scales + 192 bytes qs
+    const BLOCK_SIZE: usize = 208;
+    const ELEMENTS_PER_BLOCK: usize = 256;
+    const ELEMENTS_PER_SUB_BLOCK: usize = 32;
     
-    // Read all packed data
-    let packed_data_size = num_superblocks * 192;
-    let packed_data = reader.read_bytes(packed_data_size as u64)?;
+    let num_superblocks = (num_elements + ELEMENTS_PER_BLOCK - 1) / ELEMENTS_PER_BLOCK; // Round up
+    let total_bytes = num_superblocks * BLOCK_SIZE;
     
-    // Unpack 6-bit values to u8
-    // 4 values per 3 bytes: [value0:6][value1:2] [value1:4][value2:4] [value2:2][value3:6]
+    // Read entire superblock data at once for efficiency
+    let block_data = reader.read_bytes(total_bytes as u64)
+        .map_err(|e| format!("Q6_K tensor '{}': Failed to read {} bytes at offset {}: {}", 
+                             tensor_info.name, total_bytes, tensor_info.offset, e))?;
+    
+    // Extract quantized values, scales, and mins
     let mut quantized_data = Vec::with_capacity(num_elements);
-    let mut i = 0;
-    while i + 2 < packed_data.len() && quantized_data.len() < num_elements {
-        let byte0 = packed_data[i];
-        let byte1 = packed_data[i + 1];
-        let byte2 = packed_data[i + 2];
+    let mut scales = Vec::with_capacity(num_superblocks * 8); // 8 sub-blocks per superblock
+    let mut mins = Vec::with_capacity(num_superblocks * 8);
+    
+    // Process each superblock
+    for block_idx in 0..num_superblocks {
+        let block_start = block_idx * BLOCK_SIZE;
         
-        let value0 = byte0 & 0x3F;  // Lower 6 bits of byte0
-        let value1 = (byte0 >> 6) | ((byte1 & 0x0F) << 2);  // Upper 2 bits of byte0 + lower 4 bits of byte1
-        let value2 = (byte1 >> 4) | ((byte2 & 0x03) << 4);  // Upper 4 bits of byte1 + lower 2 bits of byte2
-        let value3 = byte2 >> 2;  // Upper 6 bits of byte2
+        // Read dm (4 bytes: 2 half floats)
+        let d = f16_to_f32(u16::from_le_bytes([
+            block_data[block_start],
+            block_data[block_start + 1],
+        ]));
+        let dmin = f16_to_f32(u16::from_le_bytes([
+            block_data[block_start + 2],
+            block_data[block_start + 3],
+        ]));
         
-        quantized_data.push(value0);
-        if quantized_data.len() < num_elements {
-            quantized_data.push(value1);
-        }
-        if quantized_data.len() < num_elements {
-            quantized_data.push(value2);
-        }
-        if quantized_data.len() < num_elements {
-            quantized_data.push(value3);
+        // Read scales array (12 bytes) - same packing scheme as Q4_K
+        let scales_start = block_start + 4;
+        let scales_bytes = &block_data[scales_start..scales_start + 12];
+        
+        // Extract scales and mins for 8 sub-blocks (6 bits each)
+        for sub_block_idx in 0..8 {
+            let (scale_6bit, min_6bit) = extract_scale_min_k4(sub_block_idx, scales_bytes);
+            
+            // Reconstruct actual scale and min: actual = dm * quantized_value
+            scales.push(d * scale_6bit as f32);
+            mins.push(dmin * min_6bit as f32);
         }
         
-        i += 3;
+        // Read quantized values (192 bytes = 256 values, 6 bits each, packed)
+        let qs_start = block_start + 16;
+        let qs_bytes = &block_data[qs_start..qs_start + 192];
+        
+        // Unpack 6-bit values: 4 values per 3 bytes
+        // Layout: [value0:6][value1:2] [value1:4][value2:4] [value2:2][value3:6]
+        let mut byte_idx = 0;
+        while byte_idx + 2 < qs_bytes.len() && quantized_data.len() < num_elements {
+            let byte0 = qs_bytes[byte_idx];
+            let byte1 = qs_bytes[byte_idx + 1];
+            let byte2 = qs_bytes[byte_idx + 2];
+            
+            let value0 = byte0 & 0x3F;  // Lower 6 bits of byte0
+            let value1 = (byte0 >> 6) | ((byte1 & 0x0F) << 2);  // Upper 2 bits of byte0 + lower 4 bits of byte1
+            let value2 = (byte1 >> 4) | ((byte2 & 0x03) << 4);  // Upper 4 bits of byte1 + lower 2 bits of byte2
+            let value3 = byte2 >> 2;  // Upper 6 bits of byte2
+            
+            quantized_data.push(value0);
+            if quantized_data.len() < num_elements {
+                quantized_data.push(value1);
+            }
+            if quantized_data.len() < num_elements {
+                quantized_data.push(value2);
+            }
+            if quantized_data.len() < num_elements {
+                quantized_data.push(value3);
+            }
+            
+            byte_idx += 3;
+        }
     }
     
-    // Read scales (f16, 8 per superblock)
-    let mut scales = Vec::with_capacity(num_scales_mins);
-    for _ in 0..num_scales_mins {
-        scales.push(reader.read_f16()?);
-    }
-    
-    // Read mins (f16, 8 per superblock)
-    let mut mins = Vec::with_capacity(num_scales_mins);
-    for _ in 0..num_scales_mins {
-        mins.push(reader.read_f16()?);
-    }
+    // Trim to exact num_elements
+    quantized_data.truncate(num_elements);
+    scales.truncate((num_elements + ELEMENTS_PER_SUB_BLOCK - 1) / ELEMENTS_PER_SUB_BLOCK);
+    mins.truncate((num_elements + ELEMENTS_PER_SUB_BLOCK - 1) / ELEMENTS_PER_SUB_BLOCK);
     
     // Validate
     if quantized_data.len() != num_elements {
         return Err(format!(
             "Q6_K tensor {}: expected {} quantized elements, got {}",
             tensor_info.name, num_elements, quantized_data.len()
-        ).into());
-    }
-    
-    if scales.len() != num_scales_mins || mins.len() != num_scales_mins {
-        return Err(format!(
-            "Q6_K tensor {}: expected {} scales/mins ({} superblocks × 8), got {}/{}",
-            tensor_info.name, num_scales_mins, num_superblocks, scales.len(), mins.len()
         ).into());
     }
     
@@ -211,7 +342,6 @@ fn load_q6k_tensor<R: BufRead + Seek>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     /// Test Q4K unpacking: Each byte contains 2 values (lower 4 bits, upper 4 bits)
     #[test]

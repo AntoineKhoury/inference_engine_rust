@@ -20,8 +20,15 @@ impl<R: BufRead + Seek> Reader<R> {
     }
 
     /// Seek to a specific position in the file
+    /// Verifies the actual position after seeking to catch buffer synchronization issues
     pub fn seek(&mut self, pos: u64) -> Result<(), Box<dyn std::error::Error>> {
-        self.buffer.seek(SeekFrom::Start(pos))?;
+        let actual_pos = self.buffer.seek(SeekFrom::Start(pos))?;
+        if actual_pos != pos {
+            return Err(format!(
+                "Seek failed: requested position {}, but got {}",
+                pos, actual_pos
+            ).into());
+        }
         self.pos = pos;
         Ok(())
     }

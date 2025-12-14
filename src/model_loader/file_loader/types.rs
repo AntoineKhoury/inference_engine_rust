@@ -167,7 +167,10 @@ impl GGUFData {
         use log::info;
         
         let file = File::open(file_path)?;
-        // Use larger buffer (1MB) instead of default 8KB for better I/O performance
+        // For random access (seeking to different tensor offsets), use File directly
+        // BufReader is optimized for sequential reads and can cause buffer invalidation issues
+        // when seeking frequently. We wrap it in BufReader only for the Reader abstraction.
+        // Note: For truly random access, File is more appropriate, but Reader expects BufRead + Seek
         let buf_reader = BufReader::with_capacity(1024 * 1024, file);
         let mut reader = crate::model_loader::file_loader::io::Reader::new(buf_reader, 0);
         
@@ -176,10 +179,18 @@ impl GGUFData {
         
         for (idx, tensor_info) in self.tensors_metadata.iter().enumerate() {
             let progress = ((idx + 1) * 100) / total_tensors;
-            info!("Loading tensor {}/{} ({}%): {}", 
-                  idx + 1, total_tensors, progress, tensor_info.name);
+            info!("Loading tensor {}/{} ({}%): {} (offset: {}, type_id: {})", 
+                  idx + 1, total_tensors, progress, tensor_info.name, tensor_info.offset, tensor_info.type_id);
             
-            let tensor = load_tensor(&mut reader, tensor_info)?;
+            let tensor = match load_tensor(&mut reader, tensor_info) {
+                Ok(t) => t,
+                Err(e) => {
+                    return Err(format!(
+                        "Failed to load tensor {}/{} '{}' (offset: {}, type_id: {}): {}",
+                        idx + 1, total_tensors, tensor_info.name, tensor_info.offset, tensor_info.type_id, e
+                    ).into());
+                }
+            };
             self.tensors.insert(tensor_info.name.clone(), tensor);
         }
         
