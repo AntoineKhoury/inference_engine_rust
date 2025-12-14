@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::io::{BufRead, Seek};
 use crate::model_loader::file_loader::types::TensorInfo;
 
@@ -7,10 +7,15 @@ use super::types::{Data, DataType, ReadingInfo};
 
 pub fn get_tensors_metadata<R: BufRead + Seek>(reader: &mut Reader<R>, tensor_count: u64) -> Result<Vec<TensorInfo>, Box<dyn std::error::Error>> {
     let mut all_tensors: Vec<TensorInfo> = Vec::with_capacity(tensor_count as usize);
+    let mut unique_types: HashSet<u32> = HashSet::new();
     for _ in 0..tensor_count{
         let curr_tensor: TensorInfo = get_tensor_metadata(reader)?;
+        if !unique_types.contains(&curr_tensor.type_id){
+            unique_types.insert(curr_tensor.type_id);
+        }
         all_tensors.push(curr_tensor);
     }
+    println!("Unique tensor types found: {:?}", unique_types);
     Ok(all_tensors)
 }
 
@@ -31,7 +36,6 @@ pub fn get_kv_metadata<R: BufRead + Seek>(reader: &mut Reader<R>, kv_count: u64)
 
     for _i in 0..kv_count {
         let (key, val) = get_kv_pair(reader)?;
-        println!("Key val pair is: {:?}", (&key, &val));
         kv.insert(key, val);
     }
     Ok(kv)

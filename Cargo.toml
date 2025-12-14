@@ -7,3 +7,6 @@ edition = "2024"
 env_logger = "0.11.8"
 gguf-rs = "0.1.4"
 log = "0.4.28"
+
+[profile.release]
+debug = true

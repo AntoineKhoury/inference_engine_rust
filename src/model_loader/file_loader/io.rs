@@ -19,9 +19,24 @@ impl<R: BufRead + Seek> Reader<R> {
         self.pos
     }
 
+    /// Seek to a specific position in the file
+    /// Verifies the actual position after seeking to catch buffer synchronization issues
+    pub fn seek(&mut self, pos: u64) -> Result<(), Box<dyn std::error::Error>> {
+        let actual_pos = self.buffer.seek(SeekFrom::Start(pos))?;
+        if actual_pos != pos {
+            return Err(format!(
+                "Seek failed: requested position {}, but got {}",
+                pos, actual_pos
+            ).into());
+        }
+        self.pos = pos;
+        Ok(())
+    }
+
     pub fn read_bytes(&mut self, size: u64) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
         let mut vec = vec![0u8; size as usize];
-        self.buffer.seek(SeekFrom::Start(self.pos))?;
+        // Read sequentially - BufReader handles buffering automatically
+        // No seek needed for sequential reads (seeking invalidates the buffer!)
         self.buffer.read_exact(&mut vec)?;
         self.pos += size;
         Ok(vec)
@@ -63,6 +78,14 @@ impl<R: BufRead + Seek> Reader<R> {
         Ok(f32::from_le_bytes(bytes.try_into().expect("Couldnt read f32")))
     }
 
+    /// Read a half-precision float (f16) and convert to f32
+    /// f16 is stored as 2 bytes in little-endian format (IEEE 754 binary16)
+    pub fn read_f16(&mut self) -> Result<f32, Box<dyn std::error::Error>> {
+        let bytes = self.read_bytes(2)?;
+        let bits = u16::from_le_bytes(bytes.try_into().expect("Couldnt read f16"));
+        Ok(f16_to_f32(bits))
+    }
+
     pub fn read_u64(&mut self) -> Result<u64, Box<dyn std::error::Error>> {
         let bytes = self.read_bytes(8)?;
         Ok(u64::from_le_bytes(bytes.try_into().expect("Couldnt read u64")))
@@ -102,9 +125,7 @@ impl<R: BufRead + Seek> Reader<R> {
         
         // Once you have the type, read the array len
         // Len is u64 so 8 bytes
-        println!("The array type is {:?}.", value_type);
         let array_len = self.read_u64()?;
-        println!("Array length is {:?}", array_len);
 
         let mut result: Vec<Data> = Vec::with_capacity(array_len as usize);
         
@@ -128,6 +149,60 @@ impl<R: BufRead + Seek> Reader<R> {
             result.push(value);
         }
         Ok(result)
+    }
+}
+
+// Convert IEEE 754 binary16 (f16) to f32
+/// This is a simple implementation for loading quantization scales/mins
+/// For production, consider using the `half` crate for more robust conversion
+fn f16_to_f32(bits: u16) -> f32 {
+    // Extract sign, exponent, and mantissa
+    let sign = (bits >> 15) & 0x1;
+    let exponent = (bits >> 10) & 0x1F;
+    let mantissa = bits & 0x3FF;
+    
+    // Handle special cases
+    if exponent == 0 {
+        // Subnormal or zero
+        if mantissa == 0 {
+            // Zero
+            if sign == 0 {
+                0.0
+            } else {
+                -0.0
+            }
+        } else {
+            // Subnormal: (-1)^sign × 2^(-14) × (mantissa / 2^10)
+            let value = (mantissa as f32) / 1024.0 * 2.0_f32.powi(-14);
+            if sign == 0 {
+                value
+            } else {
+                -value
+            }
+        }
+    } else if exponent == 0x1F {
+        // Infinity or NaN
+        if mantissa == 0 {
+            // Infinity
+            if sign == 0 {
+                f32::INFINITY
+            } else {
+                f32::NEG_INFINITY
+            }
+        } else {
+            // NaN
+            f32::NAN
+        }
+    } else {
+        // Normal number: (-1)^sign × 2^(exponent - 15) × (1 + mantissa / 2^10)
+        let exp = (exponent as i32) - 15;
+        let mant = 1.0 + (mantissa as f32) / 1024.0;
+        let value = mant * 2.0_f32.powi(exp);
+        if sign == 0 {
+            value
+        } else {
+            -value
+        }
     }
 }
 
