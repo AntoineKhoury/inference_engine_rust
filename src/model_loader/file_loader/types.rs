@@ -229,9 +229,45 @@ impl GGUFData {
         Ok(())
     }
     
-    /// Get a tensor by name
+    /// Get a tensor by name (only if already loaded)
     pub fn get_tensor(&self, name: &str) -> Option<&Tensor> {
         self.tensors.get(name)
+    }
+    
+    /// Load a single tensor by name without loading all tensors
+    /// 
+    /// This is more efficient when you only need specific tensors (e.g., just embeddings).
+    /// The tensor metadata must already be loaded (from `read_file()`).
+    /// 
+    /// # Performance
+    /// - Seeks directly to the tensor's offset in the file
+    /// - Only reads that one tensor's data
+    /// - Much faster than loading all 291 tensors when you only need one
+    pub fn load_single_tensor(&mut self, file_path: &str, tensor_name: &str) -> Result<(), Box<dyn std::error::Error>> {
+        use crate::model_loader::file_loader::tensor_loader::load_tensor;
+        use std::fs::File;
+        use std::io::BufReader;
+        
+        // Find the tensor in metadata
+        let tensor_info = self.tensors_metadata
+            .iter()
+            .find(|t| t.name == tensor_name)
+            .ok_or_else(|| format!("Tensor '{}' not found in model metadata", tensor_name))?;
+        
+        // Check if already loaded
+        if self.tensors.contains_key(tensor_name) {
+            return Ok(()); // Already loaded, nothing to do
+        }
+        
+        // Load just this one tensor
+        let file = File::open(file_path)?;
+        let buf_reader = BufReader::with_capacity(1024 * 1024, file);
+        let mut reader = crate::model_loader::file_loader::io::Reader::new(buf_reader, 0);
+        
+        let tensor = load_tensor(&mut reader, tensor_info)?;
+        self.tensors.insert(tensor_name.to_string(), tensor);
+        
+        Ok(())
     }
     
     /// Get the number of loaded tensors
@@ -242,5 +278,16 @@ impl GGUFData {
     /// Get tensor metadata (for testing/debugging)
     pub fn tensors_metadata(&self) -> &[TensorInfo] {
         &self.tensors_metadata
+    }
+    
+    /// Get metadata value by key
+    /// Useful for accessing tokenizer information and other model metadata
+    pub fn get_metadata(&self, key: &str) -> Option<&Data> {
+        self.kv.get(key)
+    }
+    
+    /// Get all metadata keys (for debugging/inspection)
+    pub fn metadata_keys(&self) -> Vec<&String> {
+        self.kv.keys().collect()
     }
 }
