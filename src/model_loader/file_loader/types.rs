@@ -77,6 +77,37 @@ impl Tensor {
     pub fn dimensions(&self) -> &[u64] {
         &self.dimensions
     }
+    
+    /// Get F32 data (for F32 tensors)
+    /// Returns None if tensor is quantized
+    pub fn f32_data(&self) -> Option<&[f32]> {
+        self.f32_data.as_deref()
+    }
+    
+    /// Get quantized data (for Q4K/Q6K tensors)
+    /// Returns None if tensor is F32
+    pub fn quantized_data(&self) -> Option<&[u8]> {
+        self.quantized_data.as_deref()
+    }
+    
+    /// Get scale factors (for Q4K/Q6K tensors)
+    /// One scale per block of 32 weights
+    /// Returns None if tensor is F32
+    pub fn scales(&self) -> Option<&[f32]> {
+        self.scales.as_deref()
+    }
+    
+    /// Get minimum values (for Q4K/Q6K tensors)
+    /// One min per block of 32 weights
+    /// Returns None if tensor is F32
+    pub fn mins(&self) -> Option<&[f32]> {
+        self.mins.as_deref()
+    }
+    
+    /// Get total number of elements
+    pub fn num_elements(&self) -> usize {
+        self.num_elements
+    }
 }
 
 #[derive(Debug, Clone)]
