@@ -1,5 +1,5 @@
 use env_logger;
-use inference_engine_rust::model_loader::file_loader::file_loader::read_file;
+use inference_engine_rust::model_loader::file_loader::read_file;
 
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();

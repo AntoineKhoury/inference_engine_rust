@@ -1,4 +1,4 @@
-use crate::model_loader::file_loader::types::{GGUFData, TensorType};
+use crate::core::types::{GGUFData, TensorType};
 
 /// Embedding lookup operation for converting token IDs to embedding vectors
 /// 
@@ -230,7 +230,7 @@ pub fn get_vocab_size(gguf_data: &GGUFData) -> Result<usize, Box<dyn std::error:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model_loader::file_loader::file_loader::read_file;
+    use crate::model_loader::file_loader::read_file;
     
     #[test]
     fn test_embedding_lookup() {

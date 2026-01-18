@@ -1,4 +1,4 @@
-use super::types::{Data, DataType};
+use crate::core::types::{Data, DataType};
 use super::io::Reader;
 use std::io::{BufRead, Seek};
 

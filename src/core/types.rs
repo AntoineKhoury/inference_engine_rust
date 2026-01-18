@@ -192,7 +192,7 @@ impl GGUFData {
     /// Opens the file, reads tensor data based on tensors_metadata, and populates the tensors HashMap
     /// Uses a larger buffer (1MB) for better I/O performance
     pub fn load_tensors(&mut self, file_path: &str) -> Result<(), Box<dyn std::error::Error>> {
-        use crate::model_loader::file_loader::tensor_loader::load_tensor;
+        use crate::model_loader::tensor_loader::load_tensor;
         use std::fs::File;
         use std::io::BufReader;
         use log::info;
@@ -203,7 +203,7 @@ impl GGUFData {
         // when seeking frequently. We wrap it in BufReader only for the Reader abstraction.
         // Note: For truly random access, File is more appropriate, but Reader expects BufRead + Seek
         let buf_reader = BufReader::with_capacity(1024 * 1024, file);
-        let mut reader = crate::model_loader::file_loader::io::Reader::new(buf_reader, 0);
+        let mut reader = crate::model_loader::io::Reader::new(buf_reader, 0);
         
         let total_tensors = self.tensors_metadata.len();
         info!("Starting to load {} tensors...", total_tensors);
@@ -244,7 +244,7 @@ impl GGUFData {
     /// - Only reads that one tensor's data
     /// - Much faster than loading all 291 tensors when you only need one
     pub fn load_single_tensor(&mut self, file_path: &str, tensor_name: &str) -> Result<(), Box<dyn std::error::Error>> {
-        use crate::model_loader::file_loader::tensor_loader::load_tensor;
+        use crate::model_loader::tensor_loader::load_tensor;
         use std::fs::File;
         use std::io::BufReader;
         
@@ -262,7 +262,7 @@ impl GGUFData {
         // Load just this one tensor
         let file = File::open(file_path)?;
         let buf_reader = BufReader::with_capacity(1024 * 1024, file);
-        let mut reader = crate::model_loader::file_loader::io::Reader::new(buf_reader, 0);
+        let mut reader = crate::model_loader::io::Reader::new(buf_reader, 0);
         
         let tensor = load_tensor(&mut reader, tensor_info)?;
         self.tensors.insert(tensor_name.to_string(), tensor);
