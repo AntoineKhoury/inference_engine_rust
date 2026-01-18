@@ -1,9 +1,9 @@
 use std::collections::{BTreeMap, HashSet};
 use std::io::{BufRead, Seek};
-use crate::model_loader::file_loader::types::TensorInfo;
+use crate::core::types::{Data, DataType, ReadingInfo, TensorInfo};
 
 use super::io::Reader;
-use super::types::{Data, DataType, ReadingInfo};
+
 
 pub fn get_tensors_metadata<R: BufRead + Seek>(reader: &mut Reader<R>, tensor_count: u64) -> Result<Vec<TensorInfo>, Box<dyn std::error::Error>> {
     let mut all_tensors: Vec<TensorInfo> = Vec::with_capacity(tensor_count as usize);

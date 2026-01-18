@@ -14,7 +14,7 @@
 ///   We compute: output[i] = sum_j(input[j] * weight[j,i])
 ///   This means we iterate over weight columns (which are contiguous in row-major)
 
-use crate::model_loader::file_loader::types::{Tensor, TensorType};
+use crate::core::types::{Tensor, TensorType};
 use super::cpu_features::CpuFeatures;
 
 /// Matrix multiplication: output = input × weight
@@ -200,7 +200,7 @@ fn matmul_f32_q6k(
 
 mod tests {
     use super::*;
-    use crate::model_loader::file_loader::types::{Tensor, TensorType};
+    use crate::core::types::{Tensor, TensorType};
     use crate::ops::cpu_features::CpuFeatures;
 
     fn create_f32_tensor(data: Vec<f32>, dimensions: Vec<u64>) -> Tensor {

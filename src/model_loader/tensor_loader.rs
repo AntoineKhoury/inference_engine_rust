@@ -1,5 +1,5 @@
 use super::io::Reader;
-use super::types::{Tensor, TensorInfo, TensorType};
+use crate::core::types::{Tensor, TensorInfo, TensorType};
 use std::io::{BufRead, Seek};
 
 /// Load a single tensor from the file based on TensorInfo

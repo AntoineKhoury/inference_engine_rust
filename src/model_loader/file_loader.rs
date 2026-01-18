@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::BufReader;
 use super::io::{extract_bytes_from_file, Reader};
 use super::parser::*;
-use super::types::GGUFData;
+use crate::core::types::GGUFData;
 
 /// Read GGUF file metadata and return GGUFData structure
 /// Note: This only reads metadata, not tensor data. Call load_tensors() to load actual tensor weights.
@@ -72,7 +72,7 @@ mod test{
         
         // Verify we can access a tensor by name
         // Check for a known tensor (e.g., first norm weight which is F32 and small)
-        use crate::model_loader::file_loader::types::TensorType;
+        use crate::core::types::TensorType;
         if let Some(tensor) = gguf_data.get_tensor("blk.0.attn_norm.weight") {
             assert_eq!(tensor.tensor_type, TensorType::F32);
         }
@@ -89,18 +89,18 @@ mod test{
             .expect("Should have blk.0.attn_norm.weight tensor");
         
         // Load just this one tensor manually
-        use crate::model_loader::file_loader::tensor_loader::load_tensor;
+        use crate::model_loader::tensor_loader::load_tensor;
         use std::fs::File;
         use std::io::BufReader;
         
         let file = File::open("./model/mistral-7b-v0.1.Q4_K_M.gguf").unwrap();
         let buf_reader = BufReader::with_capacity(1024 * 1024, file);
-        let mut reader = crate::model_loader::file_loader::io::Reader::new(buf_reader, 0);
+        let mut reader = crate::model_loader::io::Reader::new(buf_reader, 0);
         
         let tensor = load_tensor(&mut reader, tensor_info).unwrap();
         
         // Verify it's the right type and has data
-        use crate::model_loader::file_loader::types::TensorType;
+        use crate::core::types::TensorType;
         assert_eq!(tensor.tensor_type, TensorType::F32);
         assert_eq!(tensor.dimensions(), &[4096]);
     }

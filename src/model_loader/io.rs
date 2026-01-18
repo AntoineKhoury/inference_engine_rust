@@ -1,5 +1,5 @@
 use std::{fs::File, io::{BufRead, Seek, SeekFrom, BufReader, Read}};
-use super::types::{Data, DataType};
+use crate::core::types::{Data, DataType};
 use super::convert::u32_to_data_type;
 
 pub struct Reader<R: BufRead + Seek>{
