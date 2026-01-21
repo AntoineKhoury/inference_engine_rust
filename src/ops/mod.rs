@@ -11,3 +11,6 @@ pub mod rmsnorm;
 // Utility functions
 pub mod residual_add;
 pub mod cpu_features;
+
+// Model specific functions
+pub mod rope;
