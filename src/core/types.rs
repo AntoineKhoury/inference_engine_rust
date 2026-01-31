@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::{collections::{BTreeMap, HashMap}, sync::Arc};
 
 /// Tensor type identifier - public for zero-overhead kernel dispatch
 /// Used by inference kernels to select the appropriate SIMD operations
@@ -16,98 +16,120 @@ pub enum TensorType {
 /// Immutable by design - all fields except tensor_type are private
 #[derive(Debug)]
 pub struct Tensor {
-    /// Public field for zero-overhead type checking in kernels
-    pub tensor_type: TensorType,
-    
-    /// Tensor name (e.g., "blk.0.attn_q.weight")
-    name: String,
-    
-    /// Tensor dimensions (e.g., [4096, 4096] for 2D matrix)
-    dimensions: Vec<u64>,
-    
-    /// Total number of elements (product of dimensions)
-    num_elements: usize,
-    
-    /// For F32: Raw float32 values (row-major order)
-    /// For Q4K/Q6K: None
-    f32_data: Option<Vec<f32>>,
-    
-    /// For Q4K/Q6K: Unpacked quantized values as u8
-    /// Q4K: values in range 0-15
-    /// Q6K: values in range 0-63
-    /// For F32: None
-    quantized_data: Option<Vec<u8>>,
-    
-    /// For Q4K/Q6K: Scale factors (one f32 per block of 32 weights)
-    /// Length: num_elements / 32
-    /// For F32: None
-    scales: Option<Vec<f32>>,
-    
-    /// For Q4K/Q6K: Minimum values (one f32 per block of 32 weights)
-    /// Length: num_elements / 32
-    /// For F32: None
-    mins: Option<Vec<f32>>,
+    pub dtype: TensorType,
+    pub buffer: Arc<Vec<u8>>,
+    pub dimensions: Vec<u32>,
+    pub stride: Vec<u32>,
+    pub offset: u32
 }
 
 impl Tensor {
     /// Create a new Tensor (constructor for tensor_loader module)
     pub(crate) fn new(
-        tensor_type: TensorType,
-        name: String,
-        dimensions: Vec<u64>,
-        num_elements: usize,
-        f32_data: Option<Vec<f32>>,
-        quantized_data: Option<Vec<u8>>,
-        scales: Option<Vec<f32>>,
-        mins: Option<Vec<f32>>,
+        dtype: TensorType,
+        buffer: Arc<Vec<u8>>,
+        dimensions: Vec<u32>,
+        stride: Vec<u32>,
     ) -> Self {
         Self {
-            tensor_type,
-            name,
-            dimensions,
-            num_elements,
-            f32_data,
-            quantized_data,
-            scales,
-            mins,
+            dtype: dtype,
+            buffer: buffer,
+            dimensions: dimensions,
+            stride: stride,
+            offset: 0
         }
     }
-    
     /// Get tensor dimensions
-    pub fn dimensions(&self) -> &[u64] {
+    pub fn dimensions(&self) -> &[u32] {
         &self.dimensions
     }
+
+    pub fn block_iterator(&self) -> QkBlockIter<'_> {
+        let num_elements: u64 = self.dimensions.iter().fold(1u64, |acc, &d| acc.saturating_mul(d as u64));
+        let total_blocks = match self.dtype {
+            TensorType::Q4K | TensorType::Q6K => ((num_elements + 255) / 256) as usize,
+            _ => 0,
+        };
     
-    /// Get F32 data (for F32 tensors)
-    /// Returns None if tensor is quantized
-    pub fn f32_data(&self) -> Option<&[f32]> {
-        self.f32_data.as_deref()
+        QkBlockIter {
+            buffer: &self.buffer,
+            dtype: self.dtype,
+            block_index: 0,
+            total_blocks,
+        }
     }
-    
-    /// Get quantized data (for Q4K/Q6K tensors)
-    /// Returns None if tensor is F32
-    pub fn quantized_data(&self) -> Option<&[u8]> {
-        self.quantized_data.as_deref()
+}
+
+impl<'a> Iterator for QkBlockIter<'a> {
+    type Item = QkBlockRef<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.block_index >= self.total_blocks {
+            return None;
+        }
+
+        let (block_size, qs_len, qbits) = match self.dtype {
+            TensorType::Q4K => (144usize, 128usize, 4u8),
+            TensorType::Q6K => (208usize, 192usize, 6u8),
+            _ => return None,
+        };
+
+        let block_start = self.block_index * block_size;
+        let block_end = block_start + block_size;
+        if block_end > self.buffer.len() {
+            return None;
+        }
+
+        let block = &self.buffer[block_start..block_end];
+
+        let d = f16_to_f32(u16::from_le_bytes([block[0], block[1]]));
+        let dmin = f16_to_f32(u16::from_le_bytes([block[2], block[3]]));
+
+        let scales_bytes = &block[4..16];
+        let mut scales = [0u8; 8];
+        let mut mins = [0u8; 8];
+        for sub in 0..8 {
+            let (s, m) = extract_scale_min_k4(sub, scales_bytes);
+            scales[sub] = s;
+            mins[sub] = m;
+        }
+
+        let qs_start = 16;
+        let qs_end = qs_start + qs_len;
+        let qs = &block[qs_start..qs_end];
+
+        let out = QkBlockRef {
+            block_index: self.block_index,
+            d,
+            dmin,
+            scales,
+            mins,
+            qs,
+            qbits,
+        };
+
+        self.block_index += 1;
+        Some(out)
     }
-    
-    /// Get scale factors (for Q4K/Q6K tensors)
-    /// One scale per block of 32 weights
-    /// Returns None if tensor is F32
-    pub fn scales(&self) -> Option<&[f32]> {
-        self.scales.as_deref()
-    }
-    
-    /// Get minimum values (for Q4K/Q6K tensors)
-    /// One min per block of 32 weights
-    /// Returns None if tensor is F32
-    pub fn mins(&self) -> Option<&[f32]> {
-        self.mins.as_deref()
-    }
-    
-    /// Get total number of elements
-    pub fn num_elements(&self) -> usize {
-        self.num_elements
-    }
+}
+
+#[derive(Debug, Clone)]
+pub struct QkBlockIter<'a> {
+    buffer: &'a [u8],
+    dtype: TensorType,
+    block_index: usize,
+    total_blocks: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct QkBlockRef<'a>{
+    pub block_index: usize,
+    pub d: f32,
+    pub dmin: f32,
+    pub scales: [u8; 8],
+    pub mins: [u8; 8],
+    pub qs: &'a [u8],
+    pub qbits: u8
 }
 
 #[derive(Debug, Clone)]
