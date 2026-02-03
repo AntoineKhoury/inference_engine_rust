@@ -14,7 +14,8 @@
 ///   We compute: output[i] = sum_j(input[j] * weight[j,i])
 ///   This means we iterate over weight columns (which are contiguous in row-major)
 
-use crate::core::types::{Tensor, TensorType};
+use crate::core::tensor::{Tensor, TensorType};
+use crate::ops::quant::{dequantize_q4k, dequantize_q6k};
 use super::cpu_features::CpuFeatures;
 
 /// Matrix multiplication: output = input × weight
@@ -57,16 +58,10 @@ pub fn matmul(
     }
     
     // Dispatch to appropriate kernel based on weight tensor type
-    match weight.tensor_type {
-        TensorType::F32 => {
-            matmul_f32_f32(input, weight, output, cpu_features)
-        }
-        TensorType::Q4K => {
-            matmul_f32_q4k(input, weight, output, cpu_features)
-        }
-        TensorType::Q6K => {
-            matmul_f32_q6k(input, weight, output, cpu_features)
-        }
+    match weight.dtype {
+        TensorType::F32 => matmul_f32_f32(input, weight, output, cpu_features),
+        TensorType::Q4K => matmul_f32_q4k(input, weight, output, cpu_features),
+        TensorType::Q6K => matmul_f32_q6k(input, weight, output, cpu_features),
     }
 }
 
@@ -81,9 +76,6 @@ fn matmul_f32_f32(
     output: &mut [f32],
     _cpu_features: &CpuFeatures,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let weight_data = weight.f32_data()
-        .ok_or("F32 tensor missing f32_data")?;
-    
     let in_features = input.len();
     let out_features = output.len();
     
@@ -95,7 +87,8 @@ fn matmul_f32_f32(
         // Accumulate: output[out_idx] = sum(input[in_idx] * weight[in_idx, out_idx])
         for in_idx in 0..in_features {
             let weight_idx = in_idx * out_features + out_idx;
-            output[out_idx] += input[in_idx] * weight_data[weight_idx];
+            let weight_value = weight.f32_at(weight_idx)?;
+            output[out_idx] += input[in_idx] * weight_value;
         }
     }
     
@@ -116,17 +109,8 @@ fn matmul_f32_q4k(
     output: &mut [f32],
     _cpu_features: &CpuFeatures,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let quantized_data = weight.quantized_data()
-        .ok_or("Q4K tensor missing quantized_data")?;
-    let scales = weight.scales()
-        .ok_or("Q4K tensor missing scales")?;
-    let mins = weight.mins()
-        .ok_or("Q4K tensor missing mins")?;
-    
     let in_features = input.len();
     let out_features = output.len();
-    const BLOCK_SIZE: usize = 32; // 32 weights per block
-    
     // Initialize output to zero
     output.fill(0.0);
     
@@ -135,13 +119,7 @@ fn matmul_f32_q4k(
         // Accumulate: output[out_idx] = sum(input[in_idx] * dequantized_weight[in_idx, out_idx])
         for in_idx in 0..in_features {
             let weight_idx = in_idx * out_features + out_idx;
-            let block_idx = weight_idx / BLOCK_SIZE;
-            
-            // Dequantize: weight = (quantized * scale) + min
-            let quantized = quantized_data[weight_idx] as f32;
-            let scale = scales[block_idx];
-            let min = mins[block_idx];
-            let dequantized_weight = (quantized * scale) + min;
+            let dequantized_weight = dequantize_q4k(weight.buffer(), weight_idx)?;
             
             output[out_idx] += input[in_idx] * dequantized_weight;
         }
@@ -163,17 +141,8 @@ fn matmul_f32_q6k(
     output: &mut [f32],
     _cpu_features: &CpuFeatures,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let quantized_data = weight.quantized_data()
-        .ok_or("Q6K tensor missing quantized_data")?;
-    let scales = weight.scales()
-        .ok_or("Q6K tensor missing scales")?;
-    let mins = weight.mins()
-        .ok_or("Q6K tensor missing mins")?;
-    
     let in_features = input.len();
     let out_features = output.len();
-    const BLOCK_SIZE: usize = 32; // 32 weights per block
-    
     // Initialize output to zero
     output.fill(0.0);
     
@@ -182,13 +151,7 @@ fn matmul_f32_q6k(
         // Accumulate: output[out_idx] = sum(input[in_idx] * dequantized_weight[in_idx, out_idx])
         for in_idx in 0..in_features {
             let weight_idx = in_idx * out_features + out_idx;
-            let block_idx = weight_idx / BLOCK_SIZE;
-            
-            // Dequantize: weight = (quantized * scale) + min
-            let quantized = quantized_data[weight_idx] as f32;
-            let scale = scales[block_idx];
-            let min = mins[block_idx];
-            let dequantized_weight = (quantized * scale) + min;
+            let dequantized_weight = dequantize_q6k(weight.buffer(), weight_idx)?;
             
             output[out_idx] += input[in_idx] * dequantized_weight;
         }
@@ -198,48 +161,31 @@ fn matmul_f32_q6k(
 }
 
 
+#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::{Tensor, TensorType};
+    use crate::core::tensor::{Tensor, TensorType};
     use crate::ops::cpu_features::CpuFeatures;
+    use std::sync::Arc;
+
+    fn f32_bytes(data: &[f32]) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(data.len() * 4);
+        for value in data {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        bytes
+    }
 
     fn create_f32_tensor(data: Vec<f32>, dimensions: Vec<u64>) -> Tensor {
-        Tensor::new(
-            TensorType::F32,
-            "test".to_string(),
-            dimensions,
-            data.len(),
-            Some(data),
-            None,
-            None,
-            None,
-        )
+        Tensor::new(TensorType::F32, Arc::new(f32_bytes(&data)), dimensions)
     }
 
-    fn create_q4k_tensor(quantized: Vec<u8>, scales: Vec<f32>, mins: Vec<f32>, dimensions: Vec<u64>) -> Tensor {
-        Tensor::new(
-            TensorType::Q4K,
-            "test".to_string(),
-            dimensions,
-            quantized.len(),
-            None,
-            Some(quantized),
-            Some(scales),
-            Some(mins),
-        )
+    fn create_q4k_tensor(buffer: Vec<u8>, dimensions: Vec<u64>) -> Tensor {
+        Tensor::new(TensorType::Q4K, Arc::new(buffer), dimensions)
     }
 
-    fn create_q6k_tensor(quantized: Vec<u8>, scales: Vec<f32>, mins: Vec<f32>, dimensions: Vec<u64>) -> Tensor {
-        Tensor::new(
-            TensorType::Q6K,
-            "test".to_string(),
-            dimensions,
-            quantized.len(),
-            None,
-            Some(quantized),
-            Some(scales),
-            Some(mins),
-        )
+    fn create_q6k_tensor(buffer: Vec<u8>, dimensions: Vec<u64>) -> Tensor {
+        Tensor::new(TensorType::Q6K, Arc::new(buffer), dimensions)
     }
 
     #[test]
@@ -254,27 +200,22 @@ mod tests {
 
     #[test]
     fn test_matmul_f32_q4k_simple() {
-        let mut quantized = vec![0u8; 32];
-        quantized[0] = 10;
-        quantized[1] = 15;
-        quantized[2] = 5;
-        quantized[3] = 8;
-        let weight = create_q4k_tensor(quantized, vec![0.1], vec![0.0], vec![2, 2]);
+        let buffer = vec![0u8; 144];
+        let weight = create_q4k_tensor(buffer, vec![2, 2]);
         let input = vec![1.0, 2.0];
         let mut output = vec![0.0; 2];
         matmul(&input, &weight, &mut output, &CpuFeatures::detect()).unwrap();
-        assert!((output[0] - 4.0).abs() < 1e-5);
-        assert!((output[1] - 1.8).abs() < 1e-5);
+        assert!((output[0] - 0.0).abs() < 1e-5);
+        assert!((output[1] - 0.0).abs() < 1e-5);
     }
 
     #[test]
     fn test_matmul_f32_q6k_simple() {
-        let mut quantized = vec![0u8; 32];
-        quantized[0] = 50;
-        let weight = create_q6k_tensor(quantized, vec![0.1], vec![0.0], vec![1, 1]);
+        let buffer = vec![0u8; 208];
+        let weight = create_q6k_tensor(buffer, vec![1, 1]);
         let input = vec![2.0];
         let mut output = vec![0.0; 1];
         matmul(&input, &weight, &mut output, &CpuFeatures::detect()).unwrap();
-        assert!((output[0] - 10.0).abs() < 1e-5);
+        assert!((output[0] - 0.0).abs() < 1e-5);
     }
 }

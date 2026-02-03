@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, HashSet};
 use std::io::{BufRead, Seek};
-use crate::core::types::{Data, DataType, ReadingInfo, TensorInfo};
 
-use super::io::Reader;
+use crate::model_loader::gguf_types::{Data, DataType, ReadingInfo, TensorInfo};
+use crate::model_loader::reader::Reader;
 
 
 pub fn get_tensors_metadata<R: BufRead + Seek>(reader: &mut Reader<R>, tensor_count: u64) -> Result<Vec<TensorInfo>, Box<dyn std::error::Error>> {
@@ -104,7 +104,6 @@ impl ReadBytesAsType for ReadingInfo {
             DataType::Float64=> Data::Float64(reader.read_f64()?),
             DataType::String => Data::String(reader.read_string()?),
             DataType::Array => Data::Array(reader.read_array()?),
-            _ => return Err("Data type not available for easy conversion.".into()),
         };
         Ok(data)
     }

@@ -1,8 +1,9 @@
 use std::fs::File;
 use std::io::BufReader;
-use super::io::{extract_bytes_from_file, Reader};
+
+use crate::model_loader::reader::Reader;
 use super::parser::*;
-use crate::core::types::GGUFData;
+use crate::model_loader::gguf_types::GGUFData;
 
 /// Read GGUF file metadata and return GGUFData structure
 /// Note: This only reads metadata, not tensor data. Call load_tensors() to load actual tensor weights.
@@ -72,16 +73,16 @@ mod test{
         
         // Verify we can access a tensor by name
         // Check for a known tensor (e.g., first norm weight which is F32 and small)
-        use crate::core::types::TensorType;
+        use crate::core::tensor::TensorType;
         if let Some(tensor) = gguf_data.get_tensor("blk.0.attn_norm.weight") {
-            assert_eq!(tensor.tensor_type, TensorType::F32);
+            assert_eq!(tensor.dtype, TensorType::F32);
         }
     }
     
     #[test]
     fn test_load_single_tensor() {
         // Test loading just one small tensor to verify the loading logic works
-        let mut gguf_data = read_file("./model/mistral-7b-v0.1.Q4_K_M.gguf").unwrap();
+        let gguf_data = read_file("./model/mistral-7b-v0.1.Q4_K_M.gguf").unwrap();
         
         // Find a small F32 tensor (norm weights are small - 4096 elements)
         let tensor_info = gguf_data.tensors_metadata().iter()
@@ -95,13 +96,13 @@ mod test{
         
         let file = File::open("./model/mistral-7b-v0.1.Q4_K_M.gguf").unwrap();
         let buf_reader = BufReader::with_capacity(1024 * 1024, file);
-        let mut reader = crate::model_loader::io::Reader::new(buf_reader, 0);
+        let mut reader = crate::model_loader::reader::Reader::new(buf_reader, 0);
         
         let tensor = load_tensor(&mut reader, tensor_info).unwrap();
         
         // Verify it's the right type and has data
-        use crate::core::types::TensorType;
-        assert_eq!(tensor.tensor_type, TensorType::F32);
-        assert_eq!(tensor.dimensions(), &[4096]);
+        use crate::core::tensor::TensorType;
+        assert_eq!(tensor.dtype, TensorType::F32);
+        assert_eq!(tensor.dimensions(), &[4096u64]);
     }
 }

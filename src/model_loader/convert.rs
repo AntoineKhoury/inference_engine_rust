@@ -1,6 +1,4 @@
-use crate::core::types::{Data, DataType};
-use super::io::Reader;
-use std::io::{BufRead, Seek};
+use crate::model_loader::gguf_types::DataType;
 
 // Helper function to convert u32 to DataType
 pub fn u32_to_data_type(value: u32) -> Result<DataType, Box<dyn std::error::Error>> {

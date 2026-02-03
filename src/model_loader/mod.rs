@@ -1,5 +1,7 @@
 pub mod file_loader;
 pub mod convert;
-pub mod io;
 pub mod parser;
 pub mod tensor_loader;
+pub mod gguf_types;
+pub mod reader;
+pub mod tensor;

@@ -1,136 +1,5 @@
-use std::{collections::{BTreeMap, HashMap}, sync::Arc};
-
-/// Tensor type identifier - public for zero-overhead kernel dispatch
-/// Used by inference kernels to select the appropriate SIMD operations
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TensorType {
-    /// Unquantized float32 tensors (used for layer normalization weights)
-    F32,
-    /// 4-bit quantization, unpacked to u8 (values 0-15)
-    Q4K,
-    /// 6-bit quantization, unpacked to u8 (values 0-63)
-    Q6K,
-}
-
-/// Loaded tensor with all data unpacked and ready for SIMD operations
-/// Immutable by design - all fields except tensor_type are private
-#[derive(Debug)]
-pub struct Tensor {
-    pub dtype: TensorType,
-    pub buffer: Arc<Vec<u8>>,
-    pub dimensions: Vec<u32>,
-    pub stride: Vec<u32>,
-    pub offset: u32
-}
-
-impl Tensor {
-    /// Create a new Tensor (constructor for tensor_loader module)
-    pub(crate) fn new(
-        dtype: TensorType,
-        buffer: Arc<Vec<u8>>,
-        dimensions: Vec<u32>,
-        stride: Vec<u32>,
-    ) -> Self {
-        Self {
-            dtype: dtype,
-            buffer: buffer,
-            dimensions: dimensions,
-            stride: stride,
-            offset: 0
-        }
-    }
-    /// Get tensor dimensions
-    pub fn dimensions(&self) -> &[u32] {
-        &self.dimensions
-    }
-
-    pub fn block_iterator(&self) -> QkBlockIter<'_> {
-        let num_elements: u64 = self.dimensions.iter().fold(1u64, |acc, &d| acc.saturating_mul(d as u64));
-        let total_blocks = match self.dtype {
-            TensorType::Q4K | TensorType::Q6K => ((num_elements + 255) / 256) as usize,
-            _ => 0,
-        };
-    
-        QkBlockIter {
-            buffer: &self.buffer,
-            dtype: self.dtype,
-            block_index: 0,
-            total_blocks,
-        }
-    }
-}
-
-impl<'a> Iterator for QkBlockIter<'a> {
-    type Item = QkBlockRef<'a>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.block_index >= self.total_blocks {
-            return None;
-        }
-
-        let (block_size, qs_len, qbits) = match self.dtype {
-            TensorType::Q4K => (144usize, 128usize, 4u8),
-            TensorType::Q6K => (208usize, 192usize, 6u8),
-            _ => return None,
-        };
-
-        let block_start = self.block_index * block_size;
-        let block_end = block_start + block_size;
-        if block_end > self.buffer.len() {
-            return None;
-        }
-
-        let block = &self.buffer[block_start..block_end];
-
-        let d = f16_to_f32(u16::from_le_bytes([block[0], block[1]]));
-        let dmin = f16_to_f32(u16::from_le_bytes([block[2], block[3]]));
-
-        let scales_bytes = &block[4..16];
-        let mut scales = [0u8; 8];
-        let mut mins = [0u8; 8];
-        for sub in 0..8 {
-            let (s, m) = extract_scale_min_k4(sub, scales_bytes);
-            scales[sub] = s;
-            mins[sub] = m;
-        }
-
-        let qs_start = 16;
-        let qs_end = qs_start + qs_len;
-        let qs = &block[qs_start..qs_end];
-
-        let out = QkBlockRef {
-            block_index: self.block_index,
-            d,
-            dmin,
-            scales,
-            mins,
-            qs,
-            qbits,
-        };
-
-        self.block_index += 1;
-        Some(out)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct QkBlockIter<'a> {
-    buffer: &'a [u8],
-    dtype: TensorType,
-    block_index: usize,
-    total_blocks: usize,
-}
-
-#[derive(Debug, Clone)]
-pub struct QkBlockRef<'a>{
-    pub block_index: usize,
-    pub d: f32,
-    pub dmin: f32,
-    pub scales: [u8; 8],
-    pub mins: [u8; 8],
-    pub qs: &'a [u8],
-    pub qbits: u8
-}
+use std::collections::{BTreeMap, HashMap};
+use crate::core::tensor::Tensor;
 
 #[derive(Debug, Clone)]
 pub enum Data {
@@ -170,6 +39,7 @@ pub struct ReadingInfo{
     pub data_type: DataType,
 }
 
+// Struct to define the metadata from the GGUF file, describing where all the tensor information is
 #[derive(Debug)]
 pub struct TensorInfo {
     pub name: String,
@@ -225,7 +95,7 @@ impl GGUFData {
         // when seeking frequently. We wrap it in BufReader only for the Reader abstraction.
         // Note: For truly random access, File is more appropriate, but Reader expects BufRead + Seek
         let buf_reader = BufReader::with_capacity(1024 * 1024, file);
-        let mut reader = crate::model_loader::io::Reader::new(buf_reader, 0);
+        let mut reader = crate::model_loader::reader::Reader::new(buf_reader, 0);
         
         let total_tensors = self.tensors_metadata.len();
         info!("Starting to load {} tensors...", total_tensors);
@@ -284,7 +154,7 @@ impl GGUFData {
         // Load just this one tensor
         let file = File::open(file_path)?;
         let buf_reader = BufReader::with_capacity(1024 * 1024, file);
-        let mut reader = crate::model_loader::io::Reader::new(buf_reader, 0);
+        let mut reader = crate::model_loader::reader::Reader::new(buf_reader, 0);
         
         let tensor = load_tensor(&mut reader, tensor_info)?;
         self.tensors.insert(tensor_name.to_string(), tensor);
@@ -295,6 +165,21 @@ impl GGUFData {
     /// Get the number of loaded tensors
     pub fn num_tensors(&self) -> usize {
         self.tensors.len()
+    }
+
+    /// Get GGUF version from the file header
+    pub fn version(&self) -> u32 {
+        self.version
+    }
+
+    /// Total number of tensors listed in metadata
+    pub fn total_tensors(&self) -> u64 {
+        self.nb_tensors
+    }
+
+    /// Total number of key/value metadata entries
+    pub fn total_key_vals(&self) -> u64 {
+        self.nb_key_vals
     }
     
     /// Get tensor metadata (for testing/debugging)

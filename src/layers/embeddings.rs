@@ -1,4 +1,6 @@
-use crate::core::types::{GGUFData, TensorType};
+use crate::model_loader::gguf_types::GGUFData;
+use crate::core::tensor::TensorType;
+use crate::ops::quant::{dequantize_q4k_range, dequantize_q6k_range};
 
 /// Embedding lookup operation for converting token IDs to embedding vectors
 /// 
@@ -100,81 +102,40 @@ pub fn lookup_embeddings(
     // Perform embedding lookup with dequantization if needed
     let mut embeddings = Vec::with_capacity(token_ids.len());
     
-    match embedding_tensor.tensor_type {
+    match embedding_tensor.dtype {
         TensorType::F32 => {
-            // F32: Direct lookup
-            let embedding_data = embedding_tensor
-                .f32_data()
-                .ok_or("F32 embedding tensor has no data")?;
-            
+            // F32: Direct lookup from raw bytes
             // Layout: [hidden_dim, vocab_size] means row-major: row i = token i
             // Row i starts at index i * hidden_dim
             for &token_id in token_ids {
                 let row_start = (token_id as usize) * hidden_dim;
                 let row_end = row_start + hidden_dim;
-                let embedding = embedding_data[row_start..row_end].to_vec();
+                let mut embedding = Vec::with_capacity(hidden_dim);
+                for element_idx in row_start..row_end {
+                    embedding.push(embedding_tensor.f32_at(element_idx)?);
+                }
                 embeddings.push(embedding);
             }
         }
         TensorType::Q4K => {
             // Q4K: Dequantize on-the-fly
-            let quantized_data = embedding_tensor
-                .quantized_data()
-                .ok_or("Q4K embedding tensor missing quantized_data")?;
-            let scales = embedding_tensor
-                .scales()
-                .ok_or("Q4K embedding tensor missing scales")?;
-            let mins = embedding_tensor
-                .mins()
-                .ok_or("Q4K embedding tensor missing mins")?;
-            
-            const BLOCK_SIZE: usize = 32; // Q4K uses blocks of 32 weights
-            
             for &token_id in token_ids {
-                let mut embedding = Vec::with_capacity(hidden_dim);
+                let mut embedding = vec![0.0f32; hidden_dim];
                 let row_start = (token_id as usize) * hidden_dim;
                 
-                // Dequantize each element in the embedding vector
-                for dim_idx in 0..hidden_dim {
-                    let element_idx = row_start + dim_idx;
-                    let block_idx = element_idx / BLOCK_SIZE;
-                    let quantized = quantized_data[element_idx] as f32;
-                    let scale = scales[block_idx];
-                    let min = mins[block_idx];
-                    let dequantized = (quantized * scale) + min;
-                    embedding.push(dequantized);
-                }
+                // Dequantize contiguous range for the row (block-based)
+                dequantize_q4k_range(embedding_tensor.buffer(), row_start, &mut embedding)?;
                 embeddings.push(embedding);
             }
         }
         TensorType::Q6K => {
             // Q6K: Dequantize on-the-fly (similar to Q4K but 6-bit)
-            let quantized_data = embedding_tensor
-                .quantized_data()
-                .ok_or("Q6K embedding tensor missing quantized_data")?;
-            let scales = embedding_tensor
-                .scales()
-                .ok_or("Q6K embedding tensor missing scales")?;
-            let mins = embedding_tensor
-                .mins()
-                .ok_or("Q6K embedding tensor missing mins")?;
-            
-            const BLOCK_SIZE: usize = 32; // Q6K also uses blocks of 32 weights
-            
             for &token_id in token_ids {
-                let mut embedding = Vec::with_capacity(hidden_dim);
+                let mut embedding = vec![0.0f32; hidden_dim];
                 let row_start = (token_id as usize) * hidden_dim;
                 
-                // Dequantize each element in the embedding vector
-                for dim_idx in 0..hidden_dim {
-                    let element_idx = row_start + dim_idx;
-                    let block_idx = element_idx / BLOCK_SIZE;
-                    let quantized = quantized_data[element_idx] as f32;
-                    let scale = scales[block_idx];
-                    let min = mins[block_idx];
-                    let dequantized = (quantized * scale) + min;
-                    embedding.push(dequantized);
-                }
+                // Dequantize contiguous range for the row (block-based)
+                dequantize_q6k_range(embedding_tensor.buffer(), row_start, &mut embedding)?;
                 embeddings.push(embedding);
             }
         }

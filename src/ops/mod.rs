@@ -14,3 +14,6 @@ pub mod cpu_features;
 
 // Model specific functions
 pub mod rope;
+
+// Quantization helpers
+pub mod quant;
