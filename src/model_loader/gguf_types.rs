@@ -43,10 +43,10 @@ pub struct ReadingInfo{
 #[derive(Debug)]
 pub struct TensorInfo {
     pub name: String,
-    pub n_dimensions: u32,
-    pub dimensions: Vec<u64>,
+    pub n_dimensions: usize,
+    pub dimensions: Vec<usize>,
     pub type_id: u32,
-    pub offset: u64,
+    pub offset: usize,
 }
 
 #[derive(Debug)]

@@ -1,6 +1,6 @@
 use crate::model_loader::gguf_types::GGUFData;
 use crate::core::tensor::TensorType;
-use crate::ops::quant::{dequantize_q4k_range, dequantize_q6k_range};
+use crate::ops::quant::quant_K_handler::{dequantize_q4k_range, dequantize_q6k_range};
 
 /// Embedding lookup operation for converting token IDs to embedding vectors
 /// 

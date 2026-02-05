@@ -75,7 +75,7 @@ mod test{
         // Check for a known tensor (e.g., first norm weight which is F32 and small)
         use crate::core::tensor::TensorType;
         if let Some(tensor) = gguf_data.get_tensor("blk.0.attn_norm.weight") {
-            assert_eq!(tensor.dtype, TensorType::F32);
+            assert_eq!(tensor.dtype(), TensorType::F32);
         }
     }
     
@@ -102,7 +102,7 @@ mod test{
         
         // Verify it's the right type and has data
         use crate::core::tensor::TensorType;
-        assert_eq!(tensor.dtype, TensorType::F32);
-        assert_eq!(tensor.dimensions(), &[4096u64]);
+        assert_eq!(tensor.dtype(), TensorType::F32);
+        assert_eq!(tensor.dimensions(), &[4096usize]);
     }
 }

@@ -2,7 +2,7 @@
 // Functional for Q4_K and Q6_K quantization types
 
 use crate::core::tensor::TensorType;
-use crate::ops::quant::f16_to_f32;
+use crate::ops::quant::utils::f16_to_f32;
 
 impl<'a> Iterator for BlockIter<'a> {
     type Item = BlockRef<'a>;
@@ -74,23 +74,4 @@ pub struct BlockRef<'a> {
     pub mins: [u8; 8],
     pub qs: &'a [u8],
     pub qbits: u8,
-}
-
-fn extract_scale_min_k4(j: usize, scales: &[u8]) -> (u8, u8) {
-    if j < 4 {
-        let scale = scales[j] & 0x3F;
-        let min_val = scales[j + 4] & 0x3F;
-        (scale, min_val)
-    } else {
-        let low_bits = scales[j + 4];
-        let scale_low = low_bits & 0x0F;
-        let min_low = (low_bits >> 4) & 0x0F;
-
-        let scale_high = (scales[j - 4] >> 6) & 0x03;
-        let min_high = (scales[j] >> 6) & 0x03;
-
-        let scale = scale_low | (scale_high << 4);
-        let min_val = min_low | (min_high << 4);
-        (scale, min_val)
-    }
 }

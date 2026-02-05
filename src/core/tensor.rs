@@ -2,11 +2,11 @@ use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct Tensor {
-    pub dtype: TensorType,
-    pub buffer: Arc<Vec<u8>>,
-    pub dimensions: Vec<u64>,
-    pub stride: Vec<u64>,
-    pub offset: u64,
+    dtype: TensorType,
+    buffer: Arc<Vec<u8>>,
+    dimensions: Vec<usize>,
+    stride: Vec<usize>,
+    offset: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,7 +21,7 @@ pub enum TensorType {
 
 impl Tensor {
     /// Create a new Tensor that owns a raw byte buffer.
-    pub(crate) fn new(dtype: TensorType, buffer: Arc<Vec<u8>>, dimensions: Vec<u64>) -> Self {
+    pub(crate) fn new(dtype: TensorType, buffer: Arc<Vec<u8>>, dimensions: Vec<usize>) -> Self {
         let stride = compute_row_major_stride(&dimensions);
         Self {
             dtype,
@@ -34,6 +34,9 @@ impl Tensor {
 
     /// Read a single F32 value from the buffer (little-endian).
     pub fn f32_at(&self, index: usize) -> Result<f32, Box<dyn std::error::Error>> {
+        if self.dtype != TensorType::F32 {
+            return Err("Tensor dtype is not F32".into());
+        }
         let start = index
             .checked_mul(4)
             .ok_or("F32 index overflow")?;
@@ -45,22 +48,55 @@ impl Tensor {
         Ok(f32::from_le_bytes(bytes.try_into()?))
     }
 
+    /// Return a contiguous F32 slice for row-major tensors.
+    pub fn as_f32_slice(&self) -> Result<&[f32], Box<dyn std::error::Error>> {
+        if self.dtype != TensorType::F32 {
+            return Err("Tensor dtype is not F32".into());
+        }
+        let (prefix, words, suffix) = unsafe { self.buffer.as_slice().align_to::<f32>() };
+        if !prefix.is_empty() || !suffix.is_empty() {
+            return Err("Tensor buffer is not aligned for F32".into());
+        }
+        Ok(words)
+    }
+
+    /// Return a contiguous mutable F32 slice for row-major tensors.
+    pub fn as_f32_slice_mut(&mut self) -> Result<&mut [f32], Box<dyn std::error::Error>> {
+        if self.dtype != TensorType::F32 {
+            return Err("Tensor dtype is not F32".into());
+        }
+        let buffer = Arc::get_mut(&mut self.buffer).ok_or("Tensor buffer is shared")?;
+        let (prefix, words, suffix) = unsafe { buffer.as_mut_slice().align_to_mut::<f32>() };
+        if !prefix.is_empty() || !suffix.is_empty() {
+            return Err("Tensor buffer is not aligned for F32".into());
+        }
+        Ok(words)
+    }
+
     /// Access the raw byte buffer.
     pub fn buffer(&self) -> &[u8] {
         &self.buffer
     }
     /// Get tensor dimensions
-    pub fn dimensions(&self) -> &[u64] {
+    pub fn dimensions(&self) -> &[usize] {
         &self.dimensions
     }
+
+    pub fn stride(&self) -> &[usize]{
+        &self.stride
+    }
+    pub fn dtype(&self) -> TensorType{
+        self.dtype
+    }
+
 }
 
-fn compute_row_major_stride(dimensions: &[u64]) -> Vec<u64> {
+fn compute_row_major_stride(dimensions: &[usize]) -> Vec<usize> {
     if dimensions.is_empty() {
         return Vec::new();
     }
-    let mut stride = vec![0; dimensions.len()];
-    let mut acc = 1u64;
+    let mut stride = vec![0usize; dimensions.len()];
+    let mut acc = 1usize;
     for (i, dim) in dimensions.iter().rev().enumerate() {
         let idx = dimensions.len() - 1 - i;
         stride[idx] = acc;

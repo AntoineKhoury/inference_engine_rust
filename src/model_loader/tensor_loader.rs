@@ -21,12 +21,12 @@ pub fn load_tensor<R: BufRead + Seek>(
     let num_elements = tensor_info
         .dimensions
         .iter()
-        .product::<u64>() as usize;
+        .product::<usize>();
 
     let byte_len = expected_byte_len(tensor_type, num_elements)?;
 
     // Seek to the tensor's offset
-    reader.seek(tensor_info.offset).map_err(|e| {
+    reader.seek(tensor_info.offset as u64).map_err(|e| {
         format!(
             "Failed to seek to offset {} for tensor '{}': {}",
             tensor_info.offset, tensor_info.name, e

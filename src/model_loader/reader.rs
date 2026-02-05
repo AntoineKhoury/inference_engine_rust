@@ -1,6 +1,6 @@
 use std::io::{BufRead, Seek, SeekFrom};
 
-use crate::model_loader::convert::u32_to_data_type;
+use crate::model_loader::parser::u32_to_data_type;
 use crate::model_loader::gguf_types::{Data, DataType};
 
 pub struct Reader<R: BufRead + Seek> {

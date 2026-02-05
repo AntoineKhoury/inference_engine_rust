@@ -1,5 +1,4 @@
 pub mod file_loader;
-pub mod convert;
 pub mod parser;
 pub mod tensor_loader;
 pub mod gguf_types;
