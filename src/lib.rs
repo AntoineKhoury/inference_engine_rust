@@ -3,3 +3,6 @@ pub mod tokenizer;
 pub mod layers;
 pub mod model_loader;
 pub mod core;
+pub mod model_config;
+pub mod prefill;
+pub mod model_weights;

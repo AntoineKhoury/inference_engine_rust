@@ -4,3 +4,14 @@ model/*
 !model/
 /build
 /model
+/_scratch_gguf_ref/
+flamegraph.svg
+
+# Local Cursor rules / IDE (not shared in repo)
+.cursor/
+
+# Personal learning notes (keep local)
+LEARNINGS_*.md
+
+# Tokenize
+tokenizer.model

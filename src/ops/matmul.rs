@@ -5,10 +5,10 @@
 ///   This means we iterate over weight columns (which are contiguous in row-major)
 
 use crate::core::tensor::{Tensor, TensorType};
-use crate::ops::quant::quant_K_handler::{dequantize_q4k_block, dequantize_q6k_block};
+use crate::ops::quant::quant_K_handler::{
+    dequantize_q4k_block, dequantize_q6k_block, Q4K_BLOCK_SIZE, Q6K_BLOCK_SIZE,
+};
 
-const Q4K_BLOCK_SIZE: usize = 144;
-const Q6K_BLOCK_SIZE: usize = 208;
 const BLOCK_ELEMENTS: usize = 256;
 
 pub fn matmul(
@@ -294,7 +294,7 @@ mod tests {
 
     #[test]
     fn test_matmul_f32_q4k_simple() {
-        let buffer = vec![0u8; 144];
+        let buffer = vec![0u8; Q4K_BLOCK_SIZE];
         let weight = create_q4k_tensor(buffer, vec![2, 2]);
         let input = create_f32_tensor(vec![1.0, 2.0], vec![1, 2]);
         let mut output = create_zero_f32_tensor(vec![1, 2]);
@@ -306,7 +306,7 @@ mod tests {
 
     #[test]
     fn test_matmul_f32_q6k_simple() {
-        let buffer = vec![0u8; 208];
+        let buffer = vec![0u8; Q6K_BLOCK_SIZE];
         let weight = create_q6k_tensor(buffer, vec![1, 1]);
         let input = create_f32_tensor(vec![2.0], vec![1, 1]);
         let mut output = create_zero_f32_tensor(vec![1, 1]);

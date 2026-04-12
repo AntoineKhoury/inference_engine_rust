@@ -5,12 +5,15 @@ pub fn sigmoid(
     #[cfg(debug_assertions)]
     debug_assert_eq!(input.len(), output.len(), "Dimension mismatch for sigmoid");
     
-    for i in 0..input.len(){
-        if input[i] >0.0{
-            output[i] = 1.0/(1.0+(-input[i]).exp())
-        }
-        else {
-            output[i] = input[i].exp()/(1.0/input[i].exp())
+    for i in 0..input.len() {
+        let x = input[i];
+        // Numerically stable sigmoid: 1 / (1 + exp(-x))
+        if x >= 0.0 {
+            let z = (-x).exp();
+            output[i] = 1.0 / (1.0 + z);
+        } else {
+            let z = x.exp();
+            output[i] = z / (1.0 + z);
         }
     }
 

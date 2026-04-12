@@ -3,7 +3,18 @@ use std::io::BufReader;
 
 use crate::model_loader::reader::Reader;
 use super::parser::*;
-use crate::model_loader::gguf_types::GGUFData;
+use crate::model_loader::gguf_types::{Data, GGUFData};
+
+/// After the tensor info table, GGUF pads to `general.alignment` (default 32) before tensor bytes.
+fn tensor_data_section_offset(kv: &std::collections::BTreeMap<String, Data>, pos_after_tensor_info: u64) -> u64 {
+    const DEFAULT_ALIGNMENT: u32 = 32;
+    let align = match kv.get("general.alignment") {
+        Some(Data::Uint32(a)) if *a > 0 && (*a).is_power_of_two() => *a,
+        _ => DEFAULT_ALIGNMENT,
+    };
+    let a = u64::from(align);
+    (pos_after_tensor_info + a - 1) & !(a - 1)
+}
 
 /// Read GGUF file metadata and return GGUFData structure
 /// Note: This only reads metadata, not tensor data. Call load_tensors() to load actual tensor weights.
@@ -34,13 +45,17 @@ pub fn read_file(path: &str) -> Result<GGUFData, Box<dyn std::error::Error>>{
     // Read tensors metadata
     let tensors_metadata = get_tensors_metadata(&mut reader, tensor_count)?;
     println!("Read all tensors metadata: {} tensors", tensors_metadata.len());
-    
+
+    // GGUF: tensor offsets are relative to the aligned start of the tensor data blob (see gguf.cpp).
+    let tensor_data_offset = tensor_data_section_offset(&kv, reader.position());
+
     let loaded_data = GGUFData::new(
         version,
         tensor_count,
         metadata_count,
         kv,
-        tensors_metadata
+        tensors_metadata,
+        tensor_data_offset,
     );
     Ok(loaded_data)
 }
@@ -98,7 +113,7 @@ mod test{
         let buf_reader = BufReader::with_capacity(1024 * 1024, file);
         let mut reader = crate::model_loader::reader::Reader::new(buf_reader, 0);
         
-        let tensor = load_tensor(&mut reader, tensor_info).unwrap();
+        let tensor = load_tensor(&mut reader, tensor_info, gguf_data.tensor_data_offset()).unwrap();
         
         // Verify it's the right type and has data
         use crate::core::tensor::TensorType;

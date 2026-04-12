@@ -1,6 +1,18 @@
 use crate::model_loader::gguf_types::GGUFData;
 use crate::core::tensor::TensorType;
-use crate::ops::quant::quant_K_handler::{dequantize_q4k_range, dequantize_q6k_range};
+use crate::ops::quant::quant_K_handler::{
+    dequantize_q4k_block, dequantize_q6k_block, Q4K_BLOCK_SIZE, Q6K_BLOCK_SIZE,
+};
+const BLOCK_ELEMENTS: usize = 256;
+
+/// Flat index into the GGUF tensor buffer for embedding element `h` of `token_id`.
+/// Quantized tensors are stored with **reversed** dims vs metadata (see gguf `ReaderTensor` /
+/// `quant_shape_to_byte_shape`): logical rows are **vocab** × **contiguous hidden**. So the slice
+/// for one token is `token_id * hidden_dim ..` and index = `token_id * hidden_dim + h`.
+#[inline]
+fn embedding_buffer_index(hidden_dim: usize, token_id: u32, h: usize) -> usize {
+    (token_id as usize) * hidden_dim + h
+}
 
 /// Embedding lookup operation for converting token IDs to embedding vectors
 /// 
@@ -99,43 +111,61 @@ pub fn lookup_embeddings(
         }
     }
     
-    // Perform embedding lookup with dequantization if needed
+    let buf = embedding_tensor.buffer();
     let mut embeddings = Vec::with_capacity(token_ids.len());
-    
-    match embedding_tensor.dtype {
+
+    match embedding_tensor.dtype() {
         TensorType::F32 => {
-            // F32: Direct lookup from raw bytes
-            // Layout: [hidden_dim, vocab_size] means row-major: row i = token i
-            // Row i starts at index i * hidden_dim
             for &token_id in token_ids {
-                let row_start = (token_id as usize) * hidden_dim;
-                let row_end = row_start + hidden_dim;
                 let mut embedding = Vec::with_capacity(hidden_dim);
-                for element_idx in row_start..row_end {
-                    embedding.push(embedding_tensor.f32_at(element_idx)?);
+                for h in 0..hidden_dim {
+                    let idx = embedding_buffer_index(hidden_dim, token_id, h);
+                    embedding.push(embedding_tensor.f32_at(idx)?);
                 }
                 embeddings.push(embedding);
             }
         }
         TensorType::Q4K => {
-            // Q4K: Dequantize on-the-fly
             for &token_id in token_ids {
                 let mut embedding = vec![0.0f32; hidden_dim];
-                let row_start = (token_id as usize) * hidden_dim;
-                
-                // Dequantize contiguous range for the row (block-based)
-                dequantize_q4k_range(embedding_tensor.buffer(), row_start, &mut embedding)?;
+                let mut cached_block = usize::MAX;
+                let mut decoded = [0.0f32; BLOCK_ELEMENTS];
+                for h in 0..hidden_dim {
+                    let idx = embedding_buffer_index(hidden_dim, token_id, h);
+                    let block_idx = idx / BLOCK_ELEMENTS;
+                    let el = idx % BLOCK_ELEMENTS;
+                    if block_idx != cached_block {
+                        let start = block_idx * Q4K_BLOCK_SIZE;
+                        let block = buf
+                            .get(start..start + Q4K_BLOCK_SIZE)
+                            .ok_or("Q4K embedding block out of bounds")?;
+                        dequantize_q4k_block(block, &mut decoded)?;
+                        cached_block = block_idx;
+                    }
+                    embedding[h] = decoded[el];
+                }
                 embeddings.push(embedding);
             }
         }
         TensorType::Q6K => {
-            // Q6K: Dequantize on-the-fly (similar to Q4K but 6-bit)
             for &token_id in token_ids {
                 let mut embedding = vec![0.0f32; hidden_dim];
-                let row_start = (token_id as usize) * hidden_dim;
-                
-                // Dequantize contiguous range for the row (block-based)
-                dequantize_q6k_range(embedding_tensor.buffer(), row_start, &mut embedding)?;
+                let mut cached_block = usize::MAX;
+                let mut decoded = [0.0f32; BLOCK_ELEMENTS];
+                for h in 0..hidden_dim {
+                    let idx = embedding_buffer_index(hidden_dim, token_id, h);
+                    let block_idx = idx / BLOCK_ELEMENTS;
+                    let el = idx % BLOCK_ELEMENTS;
+                    if block_idx != cached_block {
+                        let start = block_idx * Q6K_BLOCK_SIZE;
+                        let block = buf
+                            .get(start..start + Q6K_BLOCK_SIZE)
+                            .ok_or("Q6K embedding block out of bounds")?;
+                        dequantize_q6k_block(block, &mut decoded)?;
+                        cached_block = block_idx;
+                    }
+                    embedding[h] = decoded[el];
+                }
                 embeddings.push(embedding);
             }
         }
@@ -215,6 +245,11 @@ mod tests {
         
         for embedding in &embeddings {
             assert_eq!(embedding.len(), hidden_dim, "Embedding dimension mismatch");
+            let n_nan = embedding.iter().filter(|x| x.is_nan()).count();
+            assert_eq!(
+                n_nan, 0,
+                "Q4_K embedding dequant must be finite (ggml-compatible sign/layout)"
+            );
         }
     }
     

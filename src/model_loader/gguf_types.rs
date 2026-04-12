@@ -55,6 +55,8 @@ pub struct GGUFData {
     nb_tensors: u64,
     nb_key_vals: u64,
     kv: BTreeMap<String, Data>,
+    /// Absolute file offset of the GGUF tensor data blob (tensor offsets are relative to this).
+    tensor_data_offset: u64,
     /// Tensor metadata (offsets, type_ids) - used during loading process
     tensors_metadata: Vec<TensorInfo>,
     /// Loaded tensors: HashMap keyed by tensor name
@@ -68,16 +70,23 @@ impl GGUFData {
         nb_tensors: u64,
         nb_key_vals: u64,
         kv: BTreeMap<String, Data>,
-        tensors_metadata: Vec<TensorInfo>
+        tensors_metadata: Vec<TensorInfo>,
+        tensor_data_offset: u64,
     ) -> Self {
         Self {
             version,
             nb_tensors,
             nb_key_vals,
             kv,
+            tensor_data_offset,
             tensors_metadata,
             tensors: HashMap::new(),
         }
+    }
+
+    /// Byte offset in the GGUF file where tensor data begins (after metadata + tensor info table).
+    pub fn tensor_data_offset(&self) -> u64 {
+        self.tensor_data_offset
     }
     
     /// Load all tensors from the GGUF file
@@ -105,7 +114,7 @@ impl GGUFData {
             info!("Loading tensor {}/{} ({}%): {} (offset: {}, type_id: {})", 
                   idx + 1, total_tensors, progress, tensor_info.name, tensor_info.offset, tensor_info.type_id);
             
-            let tensor = match load_tensor(&mut reader, tensor_info) {
+            let tensor = match load_tensor(&mut reader, tensor_info, self.tensor_data_offset) {
                 Ok(t) => t,
                 Err(e) => {
                     return Err(format!(
@@ -156,7 +165,7 @@ impl GGUFData {
         let buf_reader = BufReader::with_capacity(1024 * 1024, file);
         let mut reader = crate::model_loader::reader::Reader::new(buf_reader, 0);
         
-        let tensor = load_tensor(&mut reader, tensor_info)?;
+        let tensor = load_tensor(&mut reader, tensor_info, self.tensor_data_offset)?;
         self.tensors.insert(tensor_name.to_string(), tensor);
         
         Ok(())

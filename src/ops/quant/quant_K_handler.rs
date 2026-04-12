@@ -1,12 +1,22 @@
 use crate::ops::quant::utils::f16_to_f32;
 
-const Q4K_BLOCK_SIZE: usize = 144;
-const Q6K_BLOCK_SIZE: usize = 208;
-const BLOCK_ELEMENTS: usize = 256;
-const SUB_BLOCK_SIZE: usize = 32;
-const NBR_SUB_BLOCKS: usize = BLOCK_ELEMENTS / SUB_BLOCK_SIZE;
+/// `scale * q` with the convention that `0 * ∞` is `0` (IEEE would yield NaN).
+#[inline]
+fn scale_times_quant_f64(scale: f64, q: f64) -> f64 {
+    if q == 0.0 {
+        0.0
+    } else {
+        scale * q
+    }
+}
 
-// Function to modify a buffer of quantized q4K weights, into a f32 output buffer
+/// `block_q4_K` in ggml: d[2] + dmin[2] + scales[12] + qs[128] — 144 bytes.
+pub const Q4K_BLOCK_SIZE: usize = 144;
+/// `block_q6_K` in ggml: ql[128] + qh[64] + scales[16] + d[2] — see ggml-common.h
+pub const Q6K_BLOCK_SIZE: usize = 210;
+const BLOCK_ELEMENTS: usize = 256;
+
+/// One Q4_K superblock (256 weights). Port of ggml `dequantize_row_q4_K` for a single `block_q4_K`.
 pub fn dequantize_q4k_block(
     block: &[u8],
     out: &mut [f32],
@@ -15,81 +25,95 @@ pub fn dequantize_q4k_block(
         return Err("Q4K block output buffer too small".into());
     }
 
-    // Global scale factor for all blocks 
     let d = f16_to_f32(u16::from_le_bytes([block[0], block[1]]));
-
-    // Global scale factor for the block's offsets, scales the min value for each block
     let dmin = f16_to_f32(u16::from_le_bytes([block[2], block[3]]));
+    let d64 = d as f64;
+    let dmin64 = dmin as f64;
+    let scales = &block[4..16];
+    let q = &block[16..144];
 
-    let scales_bytes = &block[4..16];
-    let qs = &block[16..144];
+    let mut y = 0usize;
+    let mut q_ptr = 0usize;
+    let mut is = 0i32;
+    for _ in 0..4 {
+        // j += 64 in ggml: four iterations cover 256 outputs
+        let (sc, m) = extract_scale_min_k4(is as usize, scales);
+        let (sc_b, m_b) = extract_scale_min_k4((is + 1) as usize, scales);
+        let sc0 = sc as f64;
+        let m0 = m as f64;
+        let sc1 = sc_b as f64;
+        let m1b = m_b as f64;
 
-    for sub_block in 0..NBR_SUB_BLOCKS{ 
-        let base = sub_block * SUB_BLOCK_SIZE;
-        let (scale_6bit, min_6bit) = extract_scale_min_k4(sub_block, scales_bytes);
-        let scale = d * scale_6bit as f32;
-        let min = dmin * min_6bit as f32;
-        let group = base / 64;
-        let offset = base % 64;
-        let byte_start = group * 32;
-        let nibble = offset / 32;
-
-        for i in 0..SUB_BLOCK_SIZE {
-            let byte = *qs
-                .get(byte_start + i)
-                .ok_or("Q4K quantized index out of bounds")?;
-            let value = if nibble == 0 {
-                byte & 0x0F
-            } else {
-                (byte >> 4) & 0x0F
-            };
-            out[base + i] = (value as f32 * scale) + min;
+        for l in 0..32 {
+            let v = (q[q_ptr + l] & 0xF) as f64;
+            let dq = scale_times_quant_f64(d64 * sc0, v);
+            let mq = dmin64 * m0;
+            out[y + l] = (dq - mq) as f32;
         }
+        for l in 0..32 {
+            let v = ((q[q_ptr + l] >> 4) & 0x0F) as f64;
+            let dq = scale_times_quant_f64(d64 * sc1, v);
+            let mq = dmin64 * m1b;
+            out[y + 32 + l] = (dq - mq) as f32;
+        }
+        y += 64;
+        q_ptr += 32;
+        is += 2;
     }
 
     Ok(())
 }
 
+/// Dequantize one Q6_K superblock (256 weights). Layout matches ggml `block_q6_K` / `dequantize_row_q6_K`.
 pub fn dequantize_q6k_block(
     block: &[u8],
     out: &mut [f32],
 ) -> Result<(), Box<dyn std::error::Error>> {
+    if block.len() < Q6K_BLOCK_SIZE {
+        return Err("Q6K block buffer too small".into());
+    }
     if out.len() < BLOCK_ELEMENTS {
         return Err("Q6K block output buffer too small".into());
     }
 
-    let d = f16_to_f32(u16::from_le_bytes([block[0], block[1]]));
-    let dmin = f16_to_f32(u16::from_le_bytes([block[2], block[3]]));
+    let ql = &block[0..128];
+    let qh = &block[128..192];
+    let scales = &block[192..208];
+    let d = f16_to_f32(u16::from_le_bytes([block[208], block[209]]));
+    let d64 = d as f64;
 
-    let scales_bytes = &block[4..16];
-    let qs = &block[16..208];
+    // Two halves of 128 outputs each (see ggml `dequantize_row_q6_K`).
+    for half in 0..2 {
+        let y_base = half * 128;
+        let ql_off = half * 64;
+        let qh_off = half * 32;
+        let sc_off = half * 8;
+        let sc_slice = &scales[sc_off..sc_off + 8];
 
-    for sub_block in 0..NBR_SUB_BLOCKS {
-        let base = sub_block * SUB_BLOCK_SIZE;
-        let (scale_6bit, min_6bit) = extract_scale_min_k4(sub_block, scales_bytes);
-        let scale = d * scale_6bit as f32;
-        let min = dmin * min_6bit as f32;
-        let group_base = (base / 4) * 3;
+        for l in 0..32 {
+            let is = l / 16;
+            let q1 = ((ql[ql_off + l] & 0xF) as i32
+                | (((qh[qh_off + l] >> 0) & 3) as i32) << 4)
+                - 32;
+            let q2 = ((ql[ql_off + l + 32] & 0xF) as i32
+                | (((qh[qh_off + l] >> 2) & 3) as i32) << 4)
+                - 32;
+            let q3 = ((ql[ql_off + l] >> 4) as i32
+                | (((qh[qh_off + l] >> 4) & 3) as i32) << 4)
+                - 32;
+            let q4 = ((ql[ql_off + l + 32] >> 4) as i32
+                | (((qh[qh_off + l] >> 6) & 3) as i32) << 4)
+                - 32;
 
-        for group in 0..(SUB_BLOCK_SIZE / 4) {
-            let byte_idx = group_base + group * 3;
-            let bytes = qs
-                .get(byte_idx..byte_idx + 3)
-                .ok_or("Q6K quantized index out of bounds")?;
-            let byte0 = bytes[0];
-            let byte1 = bytes[1];
-            let byte2 = bytes[2];
+            let s0 = sc_slice[is] as f64;
+            let s2 = sc_slice[is + 2] as f64;
+            let s4 = sc_slice[is + 4] as f64;
+            let s6 = sc_slice[is + 6] as f64;
 
-            let value0 = byte0 & 0x3F;
-            let value1 = (byte0 >> 6) | ((byte1 & 0x0F) << 2);
-            let value2 = (byte1 >> 4) | ((byte2 & 0x03) << 4);
-            let value3 = byte2 >> 2;
-
-            let out_base = base + group * 4;
-            out[out_base] = (value0 as f32 * scale) + min;
-            out[out_base + 1] = (value1 as f32 * scale) + min;
-            out[out_base + 2] = (value2 as f32 * scale) + min;
-            out[out_base + 3] = (value3 as f32 * scale) + min;
+            out[y_base + l] = scale_times_quant_f64(d64 * s0, q1 as f64) as f32;
+            out[y_base + l + 32] = scale_times_quant_f64(d64 * s2, q2 as f64) as f32;
+            out[y_base + l + 64] = scale_times_quant_f64(d64 * s4, q3 as f64) as f32;
+            out[y_base + l + 96] = scale_times_quant_f64(d64 * s6, q4 as f64) as f32;
         }
     }
 
