@@ -6,6 +6,7 @@
 //! cargo run --release --bin bench_compare -- interactive-ttft
 //! cargo run --release --bin bench_compare -- decode-throughput -n 128
 //! cargo run --release --bin bench_compare -- all --json
+//! cargo run --release --bin bench_compare -- interactive-ttft --compare-llama
 //! ```
 //!
 //! Map results to llama-bench: **pp** = prompt tokens / prefill wall time; **tg** = decode tok/s.
@@ -15,8 +16,8 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use inference_engine_rust::bench_metrics::{
-    run_all, run_cold_start, ColdStartMetrics, DecodeThroughputMetrics, EngineBench,
-    InteractiveTtftMetrics, DEFAULT_BENCH_PROMPT,
+    run_all, run_cold_start, run_llama_completion_ttft_ref, ColdStartMetrics, DecodeThroughputMetrics,
+    EngineBench, InteractiveTtftMetrics, LlamaCompletionTtftRef, DEFAULT_BENCH_PROMPT,
 };
 
 #[derive(Parser, Debug)]
@@ -42,6 +43,14 @@ struct Cli {
     /// Exit with failure if measured decode tok/s is strictly below this (decode / all only)
     #[arg(long)]
     min_decode_tps: Option<f64>,
+
+    /// After Rust `interactive-ttft`, run `llama-completion --perf` with CPU-fair flags (see `bench_metrics::run_llama_completion_ttft_ref`).
+    #[arg(long)]
+    compare_llama: bool,
+
+    /// Path or name of `llama-completion` on `PATH`.
+    #[arg(long, default_value = "llama-completion")]
+    llama_completion_bin: PathBuf,
 
     #[command(subcommand)]
     command: Commands,
@@ -135,7 +144,7 @@ fn print_cold_human(m: &ColdStartMetrics) {
     println!("  cold_ttft_ms:       {:.3}", m.cold_ttft_ms);
 }
 
-fn print_interactive_human(m: &InteractiveTtftMetrics) {
+fn print_interactive_human(m: &InteractiveTtftMetrics, llama: Option<&LlamaCompletionTtftRef>) {
     println!("=== interactive-ttft (warm weights, fresh KV) ===");
     println!("  prompt_token_count:        {}", m.prompt_token_count);
     println!("  encode_ms:                 {:.3}", m.encode_ms);
@@ -144,6 +153,23 @@ fn print_interactive_human(m: &InteractiveTtftMetrics) {
     println!("  first_token_ms:            {:.3}", m.first_token_ms);
     println!("  ttft_infer_ms:             {:.3}  (no tokenization; closer to llama-bench)", m.ttft_infer_ms);
     println!("  ttft_with_tokenizer_ms:    {:.3}", m.ttft_with_tokenizer_ms);
+    if let Some(l) = llama {
+        println!();
+        println!("=== llama-completion --perf (reference, CPU-fair: -ngl 0, --device none, --no-op-offload, -t 1) ===");
+        println!("  load_ms (model): {:.3}", l.load_ms);
+        println!("  prompt_eval_ms:            {:.3}  (TTFT infer analog)", l.prompt_eval_ms);
+        println!("  prompt_token_count:        {}", l.prompt_tokens);
+        if l.prompt_tokens != m.prompt_token_count {
+            eprintln!(
+                "warning: llama prompt token count {} != Rust {}; check BOS handling / tokenizer alignment",
+                l.prompt_tokens, m.prompt_token_count
+            );
+        }
+        println!(
+            "  ratio ttft_infer rust/llama: {:.2}",
+            m.ttft_infer_ms / l.prompt_eval_ms
+        );
+    }
 }
 
 fn print_decode_human(m: &DecodeThroughputMetrics) {
@@ -159,6 +185,10 @@ fn print_decode_human(m: &DecodeThroughputMetrics) {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
+
+    if cli.compare_llama && !matches!(cli.command, Commands::InteractiveTtft) {
+        eprintln!("warning: --compare-llama only runs with the interactive-ttft subcommand; ignoring");
+    }
 
     match cli.command {
         Commands::All { decode_tokens } => {
@@ -178,9 +208,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     })
                 );
             } else {
-                print_cold_human(&m.cold);
+                               print_cold_human(&m.cold);
                 println!();
-                print_interactive_human(&m.interactive);
+                print_interactive_human(&m.interactive, None);
                 println!();
                 print_decode_human(&m.decode);
             }
@@ -210,7 +240,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut bench = EngineBench::load(&cli.model, &cli.tokenizer)?;
             let m = bench.run_interactive_ttft(&cli.prompt)?;
             check_interactive(&m)?;
+            let llama = if cli.compare_llama {
+                Some(run_llama_completion_ttft_ref(
+                    &cli.llama_completion_bin,
+                    &cli.model,
+                    &cli.prompt,
+                )?)
+            } else {
+                None
+            };
             if cli.json {
+                let ratio = llama
+                    .as_ref()
+                    .map(|l| m.ttft_infer_ms / l.prompt_eval_ms);
                 println!(
                     "{}",
                     serde_json::json!({
@@ -219,10 +261,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "tokenizer": cli.tokenizer,
                         "prompt": cli.prompt,
                         "metrics": m,
+                        "llama_completion": llama,
+                        "ratio_ttft_infer": ratio,
                     })
                 );
             } else {
-                print_interactive_human(&m);
+                print_interactive_human(&m, llama.as_ref());
             }
             if cli.min_decode_tps.is_some() {
                 eprintln!("warning: --min-decode-tps ignored for interactive-ttft");
