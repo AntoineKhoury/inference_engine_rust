@@ -339,3 +339,128 @@ pub fn run_all(
         decode,
     })
 }
+
+/// Reference timings from `llama-completion --perf` using **CPU-fair** defaults:
+/// no layer offload (`-ngl 0`), no device offload (`--device none`), no sneaking matmuls to the GPU
+/// (`--no-op-offload`), single thread (`-t 1`), no empty warmup (`--no-warmup`), one generated token (`-n 1`).
+///
+/// `prompt_eval_ms` matches the README / llama-bench notion of TTFT without tokenization (prompt batch only).
+/// Metal may still appear in logs as a loaded backend; with these flags the perf breakdown should not use GPU memory.
+#[derive(Debug, Clone, Serialize)]
+pub struct LlamaCompletionTtftRef {
+    pub load_ms: f64,
+    pub prompt_eval_ms: f64,
+    pub prompt_tokens: usize,
+}
+
+/// Run `llama_completion_bin` and parse `common_perf_print` lines from merged stdout+stderr.
+pub fn run_llama_completion_ttft_ref(
+    llama_completion_bin: &Path,
+    model: &Path,
+    prompt: &str,
+) -> Result<LlamaCompletionTtftRef, Box<dyn std::error::Error>> {
+    use std::process::Command;
+
+    let out = Command::new(llama_completion_bin)
+        .arg("-m")
+        .arg(model)
+        .arg("-p")
+        .arg(prompt)
+        .args([
+            "-t",
+            "1",
+            "-ngl",
+            "0",
+            "--device",
+            "none",
+            "--no-op-offload",
+            "--no-warmup",
+            "--perf",
+            "-n",
+            "1",
+        ])
+        .output()?;
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let combined = format!("{stdout}\n{stderr}");
+
+    if !out.status.success() {
+        let tail = tail_utf8(&combined, 4000);
+        return Err(format!(
+            "llama-completion exited with {}; last bytes of output:\n{tail}",
+            out.status
+        )
+        .into());
+    }
+
+    parse_llama_completion_perf_text(&combined).ok_or_else(|| {
+        let tail = tail_utf8(&combined, 2000);
+        format!("could not parse llama-completion --perf (expected `load time` + `prompt eval time` lines); tail:\n{tail}")
+            .into()
+    })
+}
+
+fn tail_utf8(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        s
+    } else {
+        let skip = s.len() - max_bytes;
+        let start = s.char_indices().find(|(i, _)| *i >= skip).map(|(i, _)| i).unwrap_or(skip);
+        &s[start..]
+    }
+}
+
+fn parse_llama_completion_perf_text(text: &str) -> Option<LlamaCompletionTtftRef> {
+    let mut load_ms = None;
+    let mut prompt_eval_ms = None;
+    let mut prompt_tokens = None;
+
+    for line in text.lines() {
+        if line.contains("prompt eval time =") {
+            prompt_eval_ms = parse_ms_after_key(line, "prompt eval time =");
+            prompt_tokens = parse_prompt_tokens_after_slash(line);
+        } else if line.contains("common_perf_print:")
+            && line.contains("load time =")
+            && !line.contains("prompt eval")
+        {
+            load_ms = parse_ms_after_key(line, "load time =").or(load_ms);
+        }
+    }
+
+    Some(LlamaCompletionTtftRef {
+        load_ms: load_ms?,
+        prompt_eval_ms: prompt_eval_ms?,
+        prompt_tokens: prompt_tokens?,
+    })
+}
+
+fn parse_ms_after_key(line: &str, key: &str) -> Option<f64> {
+    let idx = line.find(key)?;
+    let rest = line[idx + key.len()..].trim_start();
+    let end = rest.find(" ms")?;
+    rest[..end].trim().parse().ok()
+}
+
+fn parse_prompt_tokens_after_slash(line: &str) -> Option<usize> {
+    let slash = line.find('/')?;
+    let after = line[slash + 1..].trim();
+    after.split_whitespace().next()?.parse().ok()
+}
+
+#[cfg(test)]
+mod llama_perf_parse_tests {
+    use super::*;
+
+    #[test]
+    fn parses_homebrew_style_perf_block() {
+        let sample = r#"
+common_perf_print:        load time =    1610.20 ms
+common_perf_print: prompt eval time =    1609.65 ms /     6 tokens (  268.28 ms per token,     3.73 tokens per second)
+"#;
+        let p = parse_llama_completion_perf_text(sample).expect("parse");
+        assert!((p.load_ms - 1610.20).abs() < 0.01);
+        assert!((p.prompt_eval_ms - 1609.65).abs() < 0.01);
+        assert_eq!(p.prompt_tokens, 6);
+    }
+}
