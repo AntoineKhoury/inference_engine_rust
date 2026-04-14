@@ -1,8 +1,6 @@
-/// - All tensors stored in row-major order
-/// - Matmul: output = input × weight^T (weight is transposed conceptually)
-///   For row-major: C[i,j] = sum_k(A[i,k] * B[k,j])
-///   We compute: output[i] = sum_j(input[j] * weight[j,i])
-///   This means we iterate over weight columns (which are contiguous in row-major)
+/// 2D weight layout matches **ggml / GGUF** (same as llama.cpp): for `ne = [ne0, ne1]`,
+/// element `(i0, i1)` is at **`i0 + i1 * ne0`** (first dimension stride-1), **not** C row-major
+/// `i0 * ne1 + i1`. Matmul uses `W(input_kk, out_col)` at `kk + col * K` with `K = ne0`.
 
 use crate::core::tensor::{Tensor, TensorType};
 use crate::ops::quant::quant_K_handler::{
@@ -48,11 +46,8 @@ pub fn matmul(
     }
 }
 
-/// F32 × F32 matrix multiplication
-/// Scalar implementation: output[i] = sum_j(input[j] * weight[j, i])
-/// 
-/// Matrix layout: weight is stored in row-major order
-/// weight[j * out_features + i] = weight[j, i]
+/// F32 × F32 matrix multiplication  
+/// `output[row, col] = sum_kk input[row, kk] * W(kk, col)` with ggml `W` indexing.
 fn matmul_f32_f32(input: &Tensor, weight: &Tensor, output: &mut Tensor) -> Result<(), Box<dyn std::error::Error>> {
     // Expect input: [M, K], weight: [K, N], output: [M, N]
     if input.dimensions().len() != 2 || weight.dimensions().len() != 2 || output.dimensions().len() != 2 {
@@ -73,7 +68,6 @@ fn matmul_f32_f32(input: &Tensor, weight: &Tensor, output: &mut Tensor) -> Resul
     let weight_data = weight.as_f32_slice()?;
     let output_data = output.as_f32_slice_mut()?;
 
-    // row-major GEMM: for each row of input
     for row in 0..m {
         let input_row_start = row * k;
         let output_row_start = row * n;
@@ -81,7 +75,7 @@ fn matmul_f32_f32(input: &Tensor, weight: &Tensor, output: &mut Tensor) -> Resul
             let mut acc = 0.0f32;
             for kk in 0..k {
                 let a = input_data[input_row_start + kk];
-                let w = weight_data[kk * n + col];
+                let w = weight_data[kk + col * k];
                 acc += a * w;
             }
             output_data[output_row_start + col] = acc;
@@ -133,8 +127,6 @@ fn matmul_f32_q4k(
         return Err("Q4K weight buffer is smaller than expected".into());
     }
 
-    output_data.fill(0.0);
-
     let mut decoded_block = [0.0f32; BLOCK_ELEMENTS];
     let mut current_block_idx = usize::MAX;
 
@@ -142,15 +134,16 @@ fn matmul_f32_q4k(
         let input_row_start = row * k;
         let output_row_start = row * n;
 
-        for kk in 0..k {
-            let a = input_data[input_row_start + kk];
-            if a == 0.0 {
-                continue;
-            }
-            let weight_row_start = kk * n;
-
-            for col in 0..n {
-                let weight_idx = weight_row_start + col;
+        // `col` outer, `kk` inner: `weight_idx = kk + col * k` runs contiguous in `kk` (stride-1 in ggml
+        // buffer). The old `kk` outer loop stepped by `k` in `col` and was catastrophically slow on CPU.
+        for col in 0..n {
+            let mut acc = 0.0f32;
+            for kk in 0..k {
+                let a = input_data[input_row_start + kk];
+                if a == 0.0 {
+                    continue;
+                }
+                let weight_idx = kk + col * k;
                 let block_idx = weight_idx / BLOCK_ELEMENTS;
                 if block_idx != current_block_idx {
                     let block_start = block_idx * Q4K_BLOCK_SIZE;
@@ -162,8 +155,9 @@ fn matmul_f32_q4k(
                     current_block_idx = block_idx;
                 }
                 let w = decoded_block[weight_idx % BLOCK_ELEMENTS];
-                output_data[output_row_start + col] += a * w;
+                acc += a * w;
             }
+            output_data[output_row_start + col] = acc;
         }
     }
 
@@ -211,8 +205,6 @@ fn matmul_f32_q6k(
         return Err("Q6K weight buffer is smaller than expected".into());
     }
 
-    output_data.fill(0.0);
-
     let mut decoded_block = [0.0f32; BLOCK_ELEMENTS];
     let mut current_block_idx = usize::MAX;
 
@@ -220,15 +212,14 @@ fn matmul_f32_q6k(
         let input_row_start = row * k;
         let output_row_start = row * n;
 
-        for kk in 0..k {
-            let a = input_data[input_row_start + kk];
-            if a == 0.0 {
-                continue;
-            }
-            let weight_row_start = kk * n;
-
-            for col in 0..n {
-                let weight_idx = weight_row_start + col;
+        for col in 0..n {
+            let mut acc = 0.0f32;
+            for kk in 0..k {
+                let a = input_data[input_row_start + kk];
+                if a == 0.0 {
+                    continue;
+                }
+                let weight_idx = kk + col * k;
                 let block_idx = weight_idx / BLOCK_ELEMENTS;
                 if block_idx != current_block_idx {
                     let block_start = block_idx * Q6K_BLOCK_SIZE;
@@ -240,8 +231,9 @@ fn matmul_f32_q6k(
                     current_block_idx = block_idx;
                 }
                 let w = decoded_block[weight_idx % BLOCK_ELEMENTS];
-                output_data[output_row_start + col] += a * w;
+                acc += a * w;
             }
+            output_data[output_row_start + col] = acc;
         }
     }
 
@@ -284,7 +276,8 @@ mod tests {
     #[test]
     fn test_matmul_f32_f32_simple() {
         let input = create_f32_tensor(vec![1.0, 2.0], vec![1, 2]);
-        let weight = create_f32_tensor(vec![1.0, 3.0, 2.0, 4.0], vec![2, 2]);
+        // ggml [2,2]: (kk,col) -> kk + col*2; logical W = [[1,3],[2,4]] -> [1,2,3,4]
+        let weight = create_f32_tensor(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]);
         let mut output = create_zero_f32_tensor(vec![1, 2]);
         matmul(&input, &weight, &mut output).unwrap();
         let out = output.as_f32_slice().unwrap();

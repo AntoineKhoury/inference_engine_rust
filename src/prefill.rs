@@ -1,5 +1,5 @@
 use crate::layers::embeddings::lookup_embeddings;
-use crate::layers::prefill_block::prefill_layer_block;
+use crate::layers::prefill_block::{decode_layer_block, prefill_layer_block};
 use crate::model_config::ModelConfig;
 use crate::model_loader::gguf_types::GGUFData;
 use crate::model_weights::ModelWeights;
@@ -150,6 +150,48 @@ pub fn prefill_forward(
     }
 
     Ok(state)
+}
+
+/// One autoregressive step: `input` must be a single token (`seq_len == 1`). Each layer appends
+/// K/V to the corresponding cache; RoPE position is the cache length **before** this step.
+pub fn decode_forward(
+    input: &PrefillState,
+    config: &ModelConfig,
+    weights: &ModelWeights,
+    kv_caches: &mut [KVCache],
+) -> Result<PrefillState, Box<dyn std::error::Error>> {
+    if input.seq_len() != 1 {
+        return Err("decode_forward: seq_len must be 1".into());
+    }
+    if kv_caches.len() != weights.layers.len() {
+        return Err("decode_forward: kv_caches len != number of layers".into());
+    }
+
+    let mut state = PrefillState::from_flat(
+        input.hidden().to_vec(),
+        1,
+        input.hidden_dim(),
+    )?;
+
+    for (layer_idx, layer_weights) in weights.layers.iter().enumerate() {
+        let cache = &mut kv_caches[layer_idx];
+        state = decode_layer_block(&state, config, layer_weights, cache)?;
+    }
+
+    Ok(state)
+}
+
+/// Run [`decode_forward`] from a single-token embedding row (length `config.hidden_dim`).
+/// After [`ModelWeights::from_loaded`], use [`crate::layers::embeddings::lookup_embeddings_loaded`]
+/// (not [`crate::layers::embeddings::lookup_embeddings`]) so embedding reads don’t need `&mut GGUFData`.
+pub fn decode_from_embedding_row(
+    embedding_row: Vec<f32>,
+    config: &ModelConfig,
+    weights: &ModelWeights,
+    kv_caches: &mut [KVCache],
+) -> Result<PrefillState, Box<dyn std::error::Error>> {
+    let input = PrefillState::from_flat(embedding_row, 1, config.hidden_dim)?;
+    decode_forward(&input, config, weights, kv_caches)
 }
 
 pub fn final_logits_last_token(

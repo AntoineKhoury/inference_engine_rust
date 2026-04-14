@@ -38,6 +38,18 @@ pub fn reference_model_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join(REFERENCE_MODEL_REL_PATH)
 }
 
+/// [`Tokenizer::load_from_file`] at repo root (gitignored). Must match the base of [`REFERENCE_MODEL_*`]:
+/// **`mistralai/Mistral-7B-v0.1`** `tokenizer.model` (same vocab as TheBloke’s GGUF of that checkpoint).
+pub const TOKENIZER_REL_PATH: &str = "tokenizer.model";
+
+/// Official tokenizer file for Mistral-7B-v0.1 (use to refresh `tokenizer.model`).
+pub const REFERENCE_TOKENIZER_DOWNLOAD_URL: &str =
+    "https://huggingface.co/mistralai/Mistral-7B-v0.1/resolve/main/tokenizer.model";
+
+pub fn tokenizer_model_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join(TOKENIZER_REL_PATH)
+}
+
 #[inline]
 pub fn assert_close(a: f32, b: f32, eps: f32) {
     let d = (a - b).abs();

@@ -16,6 +16,7 @@ mod common;
 
 use inference_engine_rust::layers::embeddings::lookup_embeddings;
 use inference_engine_rust::model_loader::file_loader::read_file;
+use inference_engine_rust::model_config::TokenizerPromptConfig;
 
 use common::{
     assert_close, reference_model_path, REF_EMB_TOKEN2_HEAD, REF_EMB_TOKEN2_IDX1024,
@@ -24,6 +25,27 @@ use common::{
 };
 
 const EPS: f32 = 2e-5;
+
+/// Inspect GGUF tokenizer flags (run with `--ignored --nocapture` when the reference GGUF is present).
+#[test]
+#[ignore = "requires model/mistral-7b-v0.1.Q4_K_M.gguf"]
+fn mistral_tokenizer_prompt_config_from_gguf() {
+    let path = reference_model_path();
+    if !path.is_file() {
+        eprintln!("skip: missing {}", path.display());
+        return;
+    }
+    let gguf = read_file(REFERENCE_MODEL_REL_PATH).expect("read gguf");
+    let cfg = TokenizerPromptConfig::from_gguf(&gguf).expect("tokenizer prompt config");
+    eprintln!("TokenizerPromptConfig: {cfg:?}");
+    // TheBloke Mistral GGUF: no add_bos_token key — llama.cpp uses SPM defaults (BOS on, EOS off).
+    assert!(
+        cfg.add_bos_token && !cfg.add_eos_token,
+        "expected llama-SPM defaults for reference Mistral GGUF, got {cfg:?}"
+    );
+    assert_eq!(cfg.bos_token_id, 1);
+    assert_eq!(cfg.eos_token_id, 2);
+}
 
 /// Compare Rust `lookup_embeddings` to hardcoded gguf-py reference for [`REFERENCE_TOKEN_ID`].
 #[test]

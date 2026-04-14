@@ -27,15 +27,15 @@ pub fn read_file(path: &str) -> Result<GGUFData, Box<dyn std::error::Error>>{
 
     // Read version, 4 bytes, so u32
     let version = reader.read_u32()?;
-    println!("Version is: {}", version);
+    log::debug!("GGUF version: {}", version);
 
     // Read Tensor Count, 8 bytes long
     let tensor_count = reader.read_u64()?;
-    println!("Tensor count is: {}", tensor_count);
+    log::debug!("GGUF tensor count: {}", tensor_count);
 
     // Read Metadata Count, 8 bytes long
     let metadata_count = reader.read_u64()?;
-    println!("Metadata count is: {}", metadata_count);
+    log::debug!("GGUF metadata count: {}", metadata_count);
     
 
     // Read metadata tree
@@ -44,7 +44,7 @@ pub fn read_file(path: &str) -> Result<GGUFData, Box<dyn std::error::Error>>{
 
     // Read tensors metadata
     let tensors_metadata = get_tensors_metadata(&mut reader, tensor_count)?;
-    println!("Read all tensors metadata: {} tensors", tensors_metadata.len());
+    log::debug!("GGUF tensors metadata: {} tensors", tensors_metadata.len());
 
     // GGUF: tensor offsets are relative to the aligned start of the tensor data blob (see gguf.cpp).
     let tensor_data_offset = tensor_data_section_offset(&kv, reader.position());
@@ -61,11 +61,11 @@ pub fn read_file(path: &str) -> Result<GGUFData, Box<dyn std::error::Error>>{
 }
 
 #[cfg(test)]
-mod test{
-    use super::*; // This is used to have access to functions outside the module
-    
+mod test {
+    use super::*;
+
     #[test]
-    fn test_file_read_metadata(){ 
+    fn test_file_read_metadata() { 
         // Test reading metadata only
         let result = read_file("./model/mistral-7b-v0.1.Q4_K_M.gguf");
         assert!(result.is_ok(), "Failed to read file: {:?}", result.err());

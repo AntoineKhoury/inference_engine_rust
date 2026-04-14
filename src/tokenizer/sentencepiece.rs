@@ -1,6 +1,8 @@
 use sentencepiece::SentencePieceProcessor;
 use std::path::Path;
 
+use crate::model_config::TokenizerPromptConfig;
+
 /// SentencePiece tokenizer wrapper for the inference engine
 /// 
 /// This struct provides a simple interface for encoding text to token IDs
@@ -44,6 +46,14 @@ impl Tokenizer {
             id_to_piece: std::collections::HashMap::new(),
         })
     }
+
+    /// Decode arbitrary token IDs (e.g. model output) to text. Prefer this over [`Self::decode`]
+    /// when ids were not produced by a prior [`Self::encode`] on this instance.
+    pub fn decode_piece_ids(&self, ids: &[u32]) -> Result<String, Box<dyn std::error::Error>> {
+        self.inner
+            .decode_piece_ids(ids)
+            .map_err(|e| format!("decode_piece_ids: {e}").into())
+    }
     
     /// Encode text into a sequence of token IDs
     /// 
@@ -72,6 +82,23 @@ pub fn encode(&mut self, text: &str) -> Result<Vec<u32>, Box<dyn std::error::Err
             .collect();
         
         Ok(token_ids)
+    }
+
+    /// [`Self::encode`] then apply GGUF tokenizer policy (BOS/EOS) so IDs match `llama-tokenize` /
+    /// `llama-completion` for the same GGUF file.
+    pub fn encode_with_prompt_config(
+        &mut self,
+        text: &str,
+        cfg: &TokenizerPromptConfig,
+    ) -> Result<Vec<u32>, Box<dyn std::error::Error>> {
+        let mut ids = self.encode(text)?;
+        if cfg.add_bos_token {
+            ids.insert(0, cfg.bos_token_id);
+        }
+        if cfg.add_eos_token {
+            ids.push(cfg.eos_token_id);
+        }
+        Ok(ids)
     }
     
     /// Decode a sequence of token IDs back into text

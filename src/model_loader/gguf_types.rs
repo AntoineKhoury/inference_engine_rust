@@ -40,7 +40,7 @@ pub struct ReadingInfo{
 }
 
 // Struct to define the metadata from the GGUF file, describing where all the tensor information is
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TensorInfo {
     pub name: String,
     pub n_dimensions: usize,
@@ -168,6 +168,52 @@ impl GGUFData {
         let tensor = load_tensor(&mut reader, tensor_info, self.tensor_data_offset)?;
         self.tensors.insert(tensor_name.to_string(), tensor);
         
+        Ok(())
+    }
+
+    /// Load many tensors with **one** file open and a single `BufReader`.
+    ///
+    /// Prefer this over calling [`Self::load_single_tensor`] in a loop: that path opens the file
+    /// once per tensor (very slow on large GGUFs). Reads are sorted by on-disk offset to reduce
+    /// backward seeks when the name list does not match file order.
+    pub fn load_named_tensors(
+        &mut self,
+        file_path: &str,
+        tensor_names: &[String],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use crate::model_loader::tensor_loader::load_tensor;
+        use std::fs::File;
+        use std::io::BufReader;
+
+        let mut indices: Vec<usize> = Vec::new();
+        for name in tensor_names {
+            if self.tensors.contains_key(name.as_str()) {
+                continue;
+            }
+            let idx = self
+                .tensors_metadata
+                .iter()
+                .position(|t| t.name == name.as_str())
+                .ok_or_else(|| format!("Tensor '{}' not found in model metadata", name))?;
+            indices.push(idx);
+        }
+        if indices.is_empty() {
+            return Ok(());
+        }
+        indices.sort_by_key(|&i| self.tensors_metadata[i].offset);
+
+        let file = File::open(file_path)?;
+        let buf_reader = BufReader::with_capacity(1024 * 1024, file);
+        let mut reader = crate::model_loader::reader::Reader::new(buf_reader, 0);
+
+        for idx in indices {
+            let name = self.tensors_metadata[idx].name.clone();
+            let tensor = {
+                let info = &self.tensors_metadata[idx];
+                load_tensor(&mut reader, info, self.tensor_data_offset)?
+            };
+            self.tensors.insert(name, tensor);
+        }
         Ok(())
     }
     

@@ -175,9 +175,7 @@ impl ModelWeightNames {
             names_to_load.push(layer.w_down.clone());
         }
 
-        for name in names_to_load {
-            gguf.load_single_tensor(file_path, &name)?;
-        }
+        gguf.load_named_tensors(file_path, &names_to_load)?;
 
         Ok(())
     }

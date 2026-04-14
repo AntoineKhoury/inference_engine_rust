@@ -15,7 +15,7 @@ pub fn get_tensors_metadata<R: BufRead + Seek>(reader: &mut Reader<R>, tensor_co
         }
         all_tensors.push(curr_tensor);
     }
-    println!("Unique tensor types found: {:?}", unique_types);
+    log::debug!("GGUF unique tensor type_ids: {:?}", unique_types);
     Ok(all_tensors)
 }
 

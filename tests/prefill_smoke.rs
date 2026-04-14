@@ -8,7 +8,9 @@ use inference_engine_rust::model_loader::file_loader::read_file;
 use inference_engine_rust::model_weights::{ModelWeightNames, ModelWeights};
 
 use inference_engine_rust::layers::embeddings::lookup_embeddings;
-use inference_engine_rust::prefill::{final_logits_last_token, prefill_forward, prefill_from_tokens};
+use inference_engine_rust::prefill::{
+    decode_forward, final_logits_last_token, prefill_forward, prefill_from_tokens, PrefillState,
+};
 
 const MODEL_PATH: &str = common::REFERENCE_MODEL_REL_PATH;
 
@@ -108,4 +110,68 @@ fn prefill_one_token_end_to_end() {
     let logits = final_logits_last_token(&out, &config, &weights).expect("logits");
 
     assert_eq!(logits.len(), config.vocab_size);
+}
+
+/// Two-token prefill vs one-token prefill + decode for the second token should match (KV + RoPE).
+#[test]
+#[ignore]
+fn prefill_two_tokens_matches_prefill_one_then_decode() {
+    let mut gguf = read_file(MODEL_PATH).expect("read gguf");
+    let config = ModelConfig::from_gguf(&gguf).expect("config");
+    let names = ModelWeightNames::resolve(&gguf, &config).expect("resolve names");
+    names
+        .load_all(&mut gguf, MODEL_PATH)
+        .expect("load weight tensors");
+
+    let t0: u32 = 1;
+    let t1: u32 = 2;
+
+    let logits_a = {
+        let mut kv_a: Vec<KVCache> = (0..config.n_layers)
+            .map(|_| {
+                KVCache::new(
+                    config.context_length,
+                    config.n_kv_heads,
+                    config.head_dim,
+                )
+            })
+            .collect();
+        let input_a =
+            prefill_from_tokens(&mut gguf, MODEL_PATH, &config, &[t0, t1]).expect("embed2");
+        let weights = ModelWeights::from_loaded(&gguf, &names).expect("model weights");
+        let out_a = prefill_forward(&input_a, &config, &weights, &mut kv_a).expect("prefill2");
+        final_logits_last_token(&out_a, &config, &weights).expect("logits_a")
+    };
+
+    let logits_b = {
+        let mut kv_b: Vec<KVCache> = (0..config.n_layers)
+            .map(|_| {
+                KVCache::new(
+                    config.context_length,
+                    config.n_kv_heads,
+                    config.head_dim,
+                )
+            })
+            .collect();
+        let input_b = prefill_from_tokens(&mut gguf, MODEL_PATH, &config, &[t0]).expect("embed1");
+        let emb_t1 = lookup_embeddings(&mut gguf, MODEL_PATH, &[t1]).expect("embed t1");
+        let decode_in =
+            PrefillState::from_embeddings(emb_t1, config.hidden_dim).expect("decode state");
+        let weights = ModelWeights::from_loaded(&gguf, &names).expect("model weights");
+        let _out_b = prefill_forward(&input_b, &config, &weights, &mut kv_b).expect("prefill1");
+        let out_dec = decode_forward(&decode_in, &config, &weights, &mut kv_b).expect("decode");
+        final_logits_last_token(&out_dec, &config, &weights).expect("logits_b")
+    };
+
+    assert_eq!(logits_a.len(), logits_b.len());
+    let eps: f32 = 1e-3;
+    let max_delta = logits_a
+        .iter()
+        .zip(logits_b.iter())
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0f32, f32::max);
+    assert!(
+        max_delta < eps,
+        "prefill [t0,t1] vs prefill [t0] + decode t1: max |Δ| = {max_delta} (eps {eps})"
+    );
 }

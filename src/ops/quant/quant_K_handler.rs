@@ -105,10 +105,11 @@ pub fn dequantize_q6k_block(
                 | (((qh[qh_off + l] >> 6) & 3) as i32) << 4)
                 - 32;
 
-            let s0 = sc_slice[is] as f64;
-            let s2 = sc_slice[is + 2] as f64;
-            let s4 = sc_slice[is + 4] as f64;
-            let s6 = sc_slice[is + 6] as f64;
+            // `block_q6_K.scales` is16× int8 in ggml (`dequantize_row_q6_K`); must not decode as u8.
+            let s0 = (sc_slice[is] as i8) as f64;
+            let s2 = (sc_slice[is + 2] as i8) as f64;
+            let s4 = (sc_slice[is + 4] as i8) as f64;
+            let s6 = (sc_slice[is + 6] as i8) as f64;
 
             out[y_base + l] = scale_times_quant_f64(d64 * s0, q1 as f64) as f32;
             out[y_base + l + 32] = scale_times_quant_f64(d64 * s2, q2 as f64) as f32;

@@ -10,8 +10,24 @@ flamegraph.svg
 # Local Cursor rules / IDE (not shared in repo)
 .cursor/
 
-# Personal learning notes (keep local)
+# Personal / blog drafts (not shipped)
 LEARNINGS_*.md
+ENGINEERING_LOG.md
+blog_content/
+
+# Llama.cpp parity & reference binaries — keep local; report numbers in blog separately
+tools/
+
+# Optional vendor clone for reading llama sources locally
+third_party/
+
+# Python venv (local experiments)
+.venv-llama/
+.venv/
+
+# Ignored integration tests (llama.cpp comparison); engine tests stay tracked
+tests/logits_vs_llama.rs
+tests/hidden_vs_llama.rs
 
 # Tokenize
 tokenizer.model

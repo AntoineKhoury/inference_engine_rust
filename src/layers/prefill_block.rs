@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::core::tensor::{Tensor, TensorType};
-use crate::layers::attention::{prefill_attention_layer, KVCache};
+use crate::layers::attention::{decode_attention_layer, prefill_attention_layer, KVCache};
 use crate::model_config::ModelConfig;
 use crate::model_weights::LayerWeights;
 use crate::ops::matmul::matmul;
@@ -74,7 +74,7 @@ pub fn prefill_ffn(
     let gate = gate_tensor.as_f32_slice()?;
     let up = up_tensor.as_f32_slice()?;
     let mut activated = vec![0.0f32; gate.len()];
-    swiglu(up, gate, &mut activated)?;
+    swiglu(gate, up, &mut activated)?;
 
     let activated_tensor = tensor_from_f32_slice(&activated, vec![seq_len, config.ffn_dim]);
     let mut down_tensor = empty_f32_tensor(vec![seq_len, hidden_dim]);
@@ -129,6 +129,58 @@ pub fn prefill_layer_block(
     let hidden_dim = input.hidden_dim();
     let ffn_out = prefill_ffn_with_norm(&attn_out, seq_len, hidden_dim, config, weights)?;
     PrefillState::from_flat(ffn_out, seq_len, hidden_dim)
+}
+
+pub fn decode_attention_with_norm(
+    input: &PrefillState,
+    config: &ModelConfig,
+    weights: &LayerWeights,
+    kv_cache: &mut KVCache,
+) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
+    if input.seq_len() != 1 {
+        return Err("decode_attention_with_norm: seq_len must be 1".into());
+    }
+    let hidden_dim = input.hidden_dim();
+
+    let attn_norm_weights = weights.attn_norm.as_f32_slice()?;
+    if attn_norm_weights.len() != hidden_dim {
+        return Err(format!(
+            "attn_norm weights len {} != hidden_dim {}",
+            attn_norm_weights.len(),
+            hidden_dim
+        )
+        .into());
+    }
+
+    let mut normed = vec![0.0f32; hidden_dim];
+    rmsnorm(
+        input.hidden(),
+        attn_norm_weights,
+        config.rms_norm_eps,
+        &mut normed,
+    )?;
+
+    let normed_state = PrefillState::from_flat(normed, 1, hidden_dim)?;
+    let attn_out = decode_attention_layer(&normed_state, config, weights, kv_cache)?;
+
+    let mut residual_out = vec![0.0f32; hidden_dim];
+    residual_add(input.hidden(), &attn_out, &mut residual_out)?;
+    Ok(residual_out)
+}
+
+pub fn decode_layer_block(
+    input: &PrefillState,
+    config: &ModelConfig,
+    weights: &LayerWeights,
+    kv_cache: &mut KVCache,
+) -> Result<PrefillState, Box<dyn std::error::Error>> {
+    if input.seq_len() != 1 {
+        return Err("decode_layer_block: seq_len must be 1".into());
+    }
+    let hidden_dim = input.hidden_dim();
+    let attn_out = decode_attention_with_norm(input, config, weights, kv_cache)?;
+    let ffn_out = prefill_ffn_with_norm(&attn_out, 1, hidden_dim, config, weights)?;
+    PrefillState::from_flat(ffn_out, 1, hidden_dim)
 }
 
 fn tensor_from_f32_slice(data: &[f32], dimensions: Vec<usize>) -> Tensor {

@@ -1,5 +1,5 @@
 use crate::model_loader::gguf_types::GGUFData;
-use crate::core::tensor::TensorType;
+use crate::core::tensor::{Tensor, TensorType};
 use crate::ops::quant::quant_K_handler::{
     dequantize_q4k_block, dequantize_q6k_block, Q4K_BLOCK_SIZE, Q6K_BLOCK_SIZE,
 };
@@ -51,37 +51,57 @@ pub fn lookup_embeddings(
     file_path: &str,
     token_ids: &[u32],
 ) -> Result<Vec<Vec<f32>>, Box<dyn std::error::Error>> {
-    // Try common embedding tensor names used in GGUF models
-    // Check token_embd.weight first (used by Mistral) then others
-    let embedding_tensor_names = [
+    let embedding_tensor_name = resolve_embedding_tensor_name(gguf_data)?;
+
+    if gguf_data.get_tensor(embedding_tensor_name).is_none() {
+        gguf_data.load_single_tensor(file_path, embedding_tensor_name)?;
+    }
+
+    lookup_embeddings_loaded(gguf_data, token_ids)
+}
+
+/// Same as [`lookup_embeddings`], but only reads an **already-loaded** embedding tensor.
+///
+/// Use this while holding [`crate::model_weights::ModelWeights`] (which borrows `GGUFData`)
+/// so you can fetch the next token’s row during decode without `&mut GGUFData`.
+pub fn lookup_embeddings_loaded(
+    gguf_data: &GGUFData,
+    token_ids: &[u32],
+) -> Result<Vec<Vec<f32>>, Box<dyn std::error::Error>> {
+    let embedding_tensor_name = resolve_embedding_tensor_name(gguf_data)?;
+    let embedding_tensor = gguf_data
+        .get_tensor(embedding_tensor_name)
+        .ok_or_else(|| {
+            format!(
+                "Embedding tensor '{embedding_tensor_name}' not loaded; call load_single_tensor or lookup_embeddings first"
+            )
+        })?;
+
+    lookup_embedding_rows(embedding_tensor, token_ids)
+}
+
+fn resolve_embedding_tensor_name(gguf_data: &GGUFData) -> Result<&'static str, Box<dyn std::error::Error>> {
+    const NAMES: [&str; 3] = [
         "token_embd.weight",
         "tok_embeddings.weight",
         "embeddings.weight",
     ];
-    
-    // Try to find the embedding tensor in metadata first
-    let embedding_tensor_name = embedding_tensor_names
-        .iter()
-        .find(|&&name| {
-            gguf_data.tensors_metadata()
-                .iter()
-                .any(|t| t.name == name)
-        });
-    
-    let embedding_tensor_name = match embedding_tensor_name {
-        Some(name) => *name,
-        None => return Err("Embedding tensor not found in metadata. Expected one of: token_embd.weight, tok_embeddings.weight, embeddings.weight".into()),
-    };
-    
-    // Load the embedding tensor if not already loaded (lazy loading)
-    if gguf_data.get_tensor(embedding_tensor_name).is_none() {
-        gguf_data.load_single_tensor(file_path, embedding_tensor_name)?;
+    for &name in &NAMES {
+        if gguf_data
+            .tensors_metadata()
+            .iter()
+            .any(|t| t.name == name)
+        {
+            return Ok(name);
+        }
     }
-    
-    let embedding_tensor = gguf_data
-        .get_tensor(embedding_tensor_name)
-        .expect("Tensor should be loaded now");
-    
+    Err("Embedding tensor not found in metadata. Expected one of: token_embd.weight, tok_embeddings.weight, embeddings.weight".into())
+}
+
+fn lookup_embedding_rows(
+    embedding_tensor: &Tensor,
+    token_ids: &[u32],
+) -> Result<Vec<Vec<f32>>, Box<dyn std::error::Error>> {
     let dims = embedding_tensor.dimensions();
     if dims.len() != 2 {
         return Err(format!(

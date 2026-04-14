@@ -20,37 +20,37 @@ pub fn sigmoid(
     Ok(())
 }
 
+/// Llama/Mistral FFN gated activation: **SiLU(gate) × up** (same as `silu(gate) * up` in HF / llama.cpp).
+/// `gate` is the gate projection row; `up` is the up projection row (same length).
 pub fn swiglu(
-    x: &[f32],
     gate: &[f32],
-    output: &mut [f32]
-) -> Result<(), Box<dyn std::error::Error>>{
-
+    up: &[f32],
+    output: &mut [f32],
+) -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(debug_assertions)]
-    debug_assert_eq!(x.len(), gate.len(), "Dimension mismatch for SwiGLU");
+    debug_assert_eq!(gate.len(), up.len(), "Dimension mismatch for SwiGLU");
 
-    let mut sigmoid_x = vec![0.0; x.len()];
-    sigmoid(&x, &mut sigmoid_x)?;
+    let mut sigmoid_gate = vec![0.0; gate.len()];
+    sigmoid(gate, &mut sigmoid_gate)?;
 
-    for i in 0..x.len(){
-        output[i] = x[i] * sigmoid_x[i] * gate[i]
+    for i in 0..gate.len() {
+        output[i] = gate[i] * sigmoid_gate[i] * up[i];
     }
 
     Ok(())
 }
 
-mod test{
-    use super::*;
+mod test {
     #[test]
-    fn simple_swiglu(){
-    let x = vec![0.0, 1.0];
-    let gate = vec![1.0, 1.0];
-    let mut output = vec![0.0; x.len()];
-    
-    swiglu(&x, &gate, &mut output).unwrap();
-    
-    // Expected: [0.0, ~0.731]
-    assert!((output[0] - 0.0).abs() < 1e-5);
-    assert!((output[1] - 0.7310585786).abs() < 1e-3);
+    fn simple_swiglu() {
+        let gate = vec![0.0, 1.0];
+        let up = vec![1.0, 1.0];
+        let mut output = vec![0.0; gate.len()];
+
+        super::swiglu(&gate, &up, &mut output).unwrap();
+
+        // SiLU(0)*1 = 0; SiLU(1)*1 ≈ 0.731
+        assert!((output[0] - 0.0).abs() < 1e-5);
+        assert!((output[1] - 0.7310585786).abs() < 1e-3);
     }
 }
