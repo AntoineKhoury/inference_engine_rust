@@ -1,9 +1,11 @@
 use std::fs::File;
 use std::io::BufReader;
 
-use crate::model_loader::reader::Reader;
-use super::parser::*;
+use crate::EngineError;
 use crate::model_loader::gguf_types::{Data, GGUFData};
+use crate::model_loader::reader::Reader;
+
+use super::parser::*;
 
 /// After the tensor info table, GGUF pads to `general.alignment` (default 32) before tensor bytes.
 fn tensor_data_section_offset(kv: &std::collections::BTreeMap<String, Data>, pos_after_tensor_info: u64) -> u64 {
@@ -18,12 +20,12 @@ fn tensor_data_section_offset(kv: &std::collections::BTreeMap<String, Data>, pos
 
 /// Read GGUF file metadata and return GGUFData structure
 /// Note: This only reads metadata, not tensor data. Call load_tensors() to load actual tensor weights.
-pub fn read_file(path: &str) -> Result<GGUFData, Box<dyn std::error::Error>>{
+pub fn read_file(path: &str) -> Result<GGUFData, EngineError> {
     let file = File::open(path)?;
     let mut reader = Reader::new(BufReader::new(file), 0);
     
     // GGUF Header is 4 bytes, so u32
-    let _header: String = String::from_utf8(reader.read_bytes(4).unwrap())?;
+    let _header: String = String::from_utf8(reader.read_bytes(4)?)?;
 
     // Read version, 4 bytes, so u32
     let version = reader.read_u32()?;
@@ -39,7 +41,7 @@ pub fn read_file(path: &str) -> Result<GGUFData, Box<dyn std::error::Error>>{
     
 
     // Read metadata tree
-    let kv = get_kv_metadata(&mut reader, metadata_count).unwrap();
+    let kv = get_kv_metadata(&mut reader, metadata_count)?;
     //println!("Metadata: {:?}", kv);
 
     // Read tensors metadata

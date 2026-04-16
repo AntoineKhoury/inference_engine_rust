@@ -1,6 +1,7 @@
 use thiserror::Error;
 use std::sync::Arc;
 
+use crate::EngineError;
 use crate::core::tensor::{Tensor, TensorType};
 use crate::model_config::ModelConfig;
 use crate::model_weights::LayerWeights;
@@ -136,23 +137,26 @@ pub fn prefill_attention_layer(
     config: &ModelConfig,
     weights: &LayerWeights,
     kv_cache: &mut KVCache,
-) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
+) -> Result<Vec<f32>, EngineError> {
     let seq_len = input.seq_len();
     let hidden_dim = input.hidden_dim();
     if hidden_dim != config.hidden_dim {
-        return Err(format!(
-            "prefill attention: hidden_dim {} != config.hidden_dim {}",
-            hidden_dim, config.hidden_dim
-        )
-        .into());
+        return Err(EngineError::Model(format!(
+            "prefill attention: hidden_dim {hidden_dim} != config.hidden_dim {}",
+            config.hidden_dim
+        )));
     }
     if hidden_dim != config.n_heads * config.head_dim {
-        return Err("prefill attention: hidden_dim != n_heads * head_dim".into());
+        return Err(EngineError::Model(
+            "prefill attention: hidden_dim != n_heads * head_dim".into(),
+        ));
     }
 
     let kv_dim = config.n_kv_heads * config.head_dim;
     if kv_cache.n_kv_heads() != config.n_kv_heads || kv_cache.head_dim() != config.head_dim {
-        return Err("prefill attention: KVCache n_kv_heads/head_dim does not match config".into());
+        return Err(EngineError::Model(
+            "prefill attention: KVCache n_kv_heads/head_dim does not match config".into(),
+        ));
     }
 
     let group_size = config.n_heads / config.n_kv_heads;
@@ -199,7 +203,7 @@ pub fn prefill_attention_layer(
                 pos as u32,
                 head_dim as u32,
                 head_dim as u32,
-            );
+            )?;
         }
         let k_row = pos * kv_dim;
         for kv_h in 0..config.n_kv_heads {
@@ -211,7 +215,7 @@ pub fn prefill_attention_layer(
                 pos as u32,
                 head_dim as u32,
                 head_dim as u32,
-            );
+            )?;
         }
     }
 
@@ -273,26 +277,31 @@ pub fn decode_attention_layer(
     config: &ModelConfig,
     weights: &LayerWeights,
     kv_cache: &mut KVCache,
-) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
+) -> Result<Vec<f32>, EngineError> {
     let seq_len = input.seq_len();
     if seq_len != 1 {
-        return Err("decode attention: expected seq_len == 1".into());
+        return Err(EngineError::Model(
+            "decode attention: expected seq_len == 1".into(),
+        ));
     }
     let hidden_dim = input.hidden_dim();
     if hidden_dim != config.hidden_dim {
-        return Err(format!(
-            "decode attention: hidden_dim {} != config.hidden_dim {}",
-            hidden_dim, config.hidden_dim
-        )
-        .into());
+        return Err(EngineError::Model(format!(
+            "decode attention: hidden_dim {hidden_dim} != config.hidden_dim {}",
+            config.hidden_dim
+        )));
     }
     if hidden_dim != config.n_heads * config.head_dim {
-        return Err("decode attention: hidden_dim != n_heads * head_dim".into());
+        return Err(EngineError::Model(
+            "decode attention: hidden_dim != n_heads * head_dim".into(),
+        ));
     }
 
     let kv_dim = config.n_kv_heads * config.head_dim;
     if kv_cache.n_kv_heads() != config.n_kv_heads || kv_cache.head_dim() != config.head_dim {
-        return Err("decode attention: KVCache n_kv_heads/head_dim does not match config".into());
+        return Err(EngineError::Model(
+            "decode attention: KVCache n_kv_heads/head_dim does not match config".into(),
+        ));
     }
 
     let group_size = config.n_heads / config.n_kv_heads;
@@ -328,7 +337,7 @@ pub fn decode_attention_layer(
             rope_pos,
             head_dim as u32,
             head_dim as u32,
-        );
+        )?;
     }
     for kv_h in 0..config.n_kv_heads {
         let head_start = kv_h * head_dim;
@@ -339,7 +348,7 @@ pub fn decode_attention_layer(
             rope_pos,
             head_dim as u32,
             head_dim as u32,
-        );
+        )?;
     }
 
     kv_cache.append_kv(k_data, v_data)?;

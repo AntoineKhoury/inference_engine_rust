@@ -1,6 +1,7 @@
 use sentencepiece::SentencePieceProcessor;
 use std::path::Path;
 
+use crate::EngineError;
 use crate::model_config::TokenizerPromptConfig;
 
 /// SentencePiece tokenizer wrapper for the inference engine
@@ -37,9 +38,10 @@ impl Tokenizer {
     /// # Performance Note
     /// Loading the tokenizer involves reading and parsing the model file.
     /// This is typically done once during initialization and cached for reuse.
-    pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
-        let inner = SentencePieceProcessor::open(path)
-            .map_err(|e| format!("Failed to load tokenizer: {}", e))?;
+    pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, EngineError> {
+        let inner = SentencePieceProcessor::open(path).map_err(|e| {
+            EngineError::Tokenizer(format!("failed to load tokenizer: {e}"))
+        })?;
         
         Ok(Self { 
             inner,
@@ -49,10 +51,10 @@ impl Tokenizer {
 
     /// Decode arbitrary token IDs (e.g. model output) to text. Prefer this over [`Self::decode`]
     /// when ids were not produced by a prior [`Self::encode`] on this instance.
-    pub fn decode_piece_ids(&self, ids: &[u32]) -> Result<String, Box<dyn std::error::Error>> {
+    pub fn decode_piece_ids(&self, ids: &[u32]) -> Result<String, EngineError> {
         self.inner
             .decode_piece_ids(ids)
-            .map_err(|e| format!("decode_piece_ids: {e}").into())
+            .map_err(|e| EngineError::Tokenizer(format!("decode_piece_ids: {e}")))
     }
     
     /// Encode text into a sequence of token IDs
@@ -65,11 +67,13 @@ impl Tokenizer {
     /// 
 /// # Errors
 /// Returns an error if tokenization fails (should be rare for valid input)
-pub fn encode(&mut self, text: &str) -> Result<Vec<u32>, Box<dyn std::error::Error>> {
+pub fn encode(&mut self, text: &str) -> Result<Vec<u32>, EngineError> {
         // The encode method returns a vector of SentencePiecePiece structs
         // Each piece has an id field (token ID) and a piece field (string representation)
-        let pieces = self.inner.encode(text)
-            .map_err(|e| format!("Failed to encode text: {}", e))?;
+        let pieces = self
+            .inner
+            .encode(text)
+            .map_err(|e| EngineError::Tokenizer(format!("encode: {e}")))?;
         
         // Cache the piece strings for decoding later
         for piece in &pieces {
@@ -90,7 +94,7 @@ pub fn encode(&mut self, text: &str) -> Result<Vec<u32>, Box<dyn std::error::Err
         &mut self,
         text: &str,
         cfg: &TokenizerPromptConfig,
-    ) -> Result<Vec<u32>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<u32>, EngineError> {
         let mut ids = self.encode(text)?;
         if cfg.add_bos_token {
             ids.insert(0, cfg.bos_token_id);
@@ -111,7 +115,7 @@ pub fn encode(&mut self, text: &str) -> Result<Vec<u32>, Box<dyn std::error::Err
     /// 
 /// # Errors
 /// Returns an error if decoding fails (e.g., invalid token IDs)
-pub fn decode(&self, tokens: &[u32]) -> Result<String, Box<dyn std::error::Error>> {
+pub fn decode(&self, tokens: &[u32]) -> Result<String, EngineError> {
         // The sentencepiece crate API may vary - let's try different approaches
         // First, try if there's a decode_ids method
         // If not, we'll need to reconstruct pieces from cached strings
@@ -137,12 +141,11 @@ pub fn decode(&self, tokens: &[u32]) -> Result<String, Box<dyn std::error::Error
             // Note: This is a placeholder - actual API may differ
             Ok(piece_strings.join(""))
         } else {
-            Err(format!(
-                "Cannot decode: missing piece strings for {} out of {} tokens. \
-                 Decode requires pieces to be cached during encoding.",
+            Err(EngineError::Tokenizer(format!(
+                "cannot decode: missing piece strings for {} out of {} tokens (decode needs cache from encode)",
                 tokens.len() - piece_strings.len(),
                 tokens.len()
-            ).into())
+            )))
         }
     }
     

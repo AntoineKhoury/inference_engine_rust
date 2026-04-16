@@ -12,6 +12,7 @@ use std::time::Instant;
 
 use serde::Serialize;
 
+use crate::EngineError;
 use crate::layers::attention::KVCache;
 use crate::layers::embeddings::lookup_embeddings_loaded;
 use crate::model_config::{ModelConfig, TokenizerPromptConfig};
@@ -90,17 +91,23 @@ pub struct EngineBench {
 
 impl EngineBench {
     /// Load GGUF metadata, tokenizer, resolve names, and [`ModelWeightNames::load_all`] (no inference).
-    pub fn load(model: &Path, tokenizer_path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn load(model: &Path, tokenizer_path: &Path) -> Result<Self, EngineError> {
         if !model.is_file() {
-            return Err(format!("model file not found: {}", model.display()).into());
+            return Err(EngineError::Model(format!(
+                "model file not found: {}",
+                model.display()
+            )));
         }
         if !tokenizer_path.is_file() {
-            return Err(format!("tokenizer file not found: {}", tokenizer_path.display()).into());
+            return Err(EngineError::Model(format!(
+                "tokenizer file not found: {}",
+                tokenizer_path.display()
+            )));
         }
 
         let model_path = model
             .to_str()
-            .ok_or("model path is not valid UTF-8")?
+            .ok_or_else(|| EngineError::Model("model path is not valid UTF-8".into()))?
             .to_string();
 
         let mut gguf = read_file(model_path.as_str())?;
@@ -121,7 +128,7 @@ impl EngineBench {
     }
 
     /// Strict interactive: fresh KV; time encode, prefill, first greedy token.
-    pub fn run_interactive_ttft(&mut self, prompt: &str) -> Result<InteractiveTtftMetrics, Box<dyn std::error::Error>> {
+    pub fn run_interactive_ttft(&mut self, prompt: &str) -> Result<InteractiveTtftMetrics, EngineError> {
         let t_enc0 = Instant::now();
         let prompt_ids = self
             .tokenizer
@@ -177,9 +184,11 @@ impl EngineBench {
         &mut self,
         prompt: &str,
         decode_tokens: usize,
-    ) -> Result<DecodeThroughputMetrics, Box<dyn std::error::Error>> {
+    ) -> Result<DecodeThroughputMetrics, EngineError> {
         if decode_tokens == 0 {
-            return Err("decode_throughput: decode_tokens must be > 0".into());
+            return Err(EngineError::Model(
+                "decode_throughput: decode_tokens must be > 0".into(),
+            ));
         }
 
         let prompt_ids = self
@@ -233,19 +242,25 @@ pub fn run_cold_start(
     model: &Path,
     tokenizer_path: &Path,
     prompt: &str,
-) -> Result<(ColdStartMetrics, EngineBench), Box<dyn std::error::Error>> {
+) -> Result<(ColdStartMetrics, EngineBench), EngineError> {
     if !model.is_file() {
-        return Err(format!("model file not found: {}", model.display()).into());
+        return Err(EngineError::Model(format!(
+            "model file not found: {}",
+            model.display()
+        )));
     }
     if !tokenizer_path.is_file() {
-        return Err(format!("tokenizer file not found: {}", tokenizer_path.display()).into());
+        return Err(EngineError::Model(format!(
+            "tokenizer file not found: {}",
+            tokenizer_path.display()
+        )));
     }
 
     let wall0 = Instant::now();
 
     let model_path = model
         .to_str()
-        .ok_or("model path is not valid UTF-8")?
+        .ok_or_else(|| EngineError::Model("model path is not valid UTF-8".into()))?
         .to_string();
 
     let t0 = Instant::now();
@@ -329,7 +344,7 @@ pub fn run_all(
     tokenizer_path: &Path,
     prompt: &str,
     decode_tokens: usize,
-) -> Result<AllMetrics, Box<dyn std::error::Error>> {
+) -> Result<AllMetrics, EngineError> {
     let (cold, mut bench) = run_cold_start(model, tokenizer_path, prompt)?;
     let interactive = bench.run_interactive_ttft(prompt)?;
     let decode = bench.run_decode_throughput(prompt, decode_tokens)?;
@@ -358,7 +373,7 @@ pub fn run_llama_completion_ttft_ref(
     llama_completion_bin: &Path,
     model: &Path,
     prompt: &str,
-) -> Result<LlamaCompletionTtftRef, Box<dyn std::error::Error>> {
+) -> Result<LlamaCompletionTtftRef, EngineError> {
     use std::process::Command;
 
     let out = Command::new(llama_completion_bin)
@@ -387,17 +402,16 @@ pub fn run_llama_completion_ttft_ref(
 
     if !out.status.success() {
         let tail = tail_utf8(&combined, 4000);
-        return Err(format!(
+        return Err(EngineError::Model(format!(
             "llama-completion exited with {}; last bytes of output:\n{tail}",
-            out.status
-        )
-        .into());
+            out.status)));
     }
 
     parse_llama_completion_perf_text(&combined).ok_or_else(|| {
         let tail = tail_utf8(&combined, 2000);
-        format!("could not parse llama-completion --perf (expected `load time` + `prompt eval time` lines); tail:\n{tail}")
-            .into()
+        EngineError::Model(format!(
+            "could not parse llama-completion --perf (expected `load time` + `prompt eval time` lines); tail:\n{tail}"
+        ))
     })
 }
 

@@ -2,6 +2,7 @@ use std::io::{BufRead, Seek};
 use std::sync::Arc;
 
 use crate::core::tensor::Tensor;
+use crate::EngineError;
 use crate::model_loader::gguf_types::TensorInfo;
 use crate::model_loader::reader::Reader;
 use crate::model_loader::tensor::GgmlType;
@@ -18,7 +19,7 @@ pub fn load_tensor<R: BufRead + Seek>(
     reader: &mut Reader<R>,
     tensor_info: &TensorInfo,
     tensor_data_base: u64,
-) -> Result<Tensor, Box<dyn std::error::Error>> {
+) -> Result<Tensor, EngineError> {
     let ggml_type = GgmlType::try_from(tensor_info.type_id)?;
     let tensor_type = ggml_type.to_tensor_type()?;
     let num_elements = tensor_info
@@ -30,26 +31,12 @@ pub fn load_tensor<R: BufRead + Seek>(
 
     let abs_offset = tensor_data_base
         .checked_add(tensor_info.offset as u64)
-        .ok_or("tensor offset overflow")?;
+        .ok_or_else(|| EngineError::Gguf("tensor offset overflow".into()))?;
 
     // Seek to the tensor's data (GGUF: offset is relative to tensor data section)
-    reader.seek(abs_offset).map_err(|e| {
-        format!(
-            "Failed to seek to offset {} (base {} + rel {}) for tensor '{}': {}",
-            abs_offset,
-            tensor_data_base,
-            tensor_info.offset,
-            tensor_info.name,
-            e
-        )
-    })?;
+    reader.seek(abs_offset)?;
 
-    let buffer = reader.read_bytes(byte_len as u64).map_err(|e| {
-        format!(
-            "Failed to read {} bytes for tensor '{}': {}",
-            byte_len, tensor_info.name, e
-        )
-    })?;
+    let buffer = reader.read_bytes(byte_len as u64)?;
 
     Ok(Tensor::new(
         tensor_type,
@@ -61,7 +48,7 @@ pub fn load_tensor<R: BufRead + Seek>(
 fn expected_byte_len(
     tensor_type: crate::core::tensor::TensorType,
     num_elements: usize,
-) -> Result<usize, Box<dyn std::error::Error>> {
+) -> Result<usize, EngineError> {
     match tensor_type {
         crate::core::tensor::TensorType::F32 => Ok(num_elements * 4),
         crate::core::tensor::TensorType::Q4K => {

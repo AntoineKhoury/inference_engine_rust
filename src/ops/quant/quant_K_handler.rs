@@ -1,3 +1,4 @@
+use crate::EngineError;
 use crate::ops::quant::utils::f16_to_f32;
 
 /// `scale * q` with the convention that `0 * ∞` is `0` (IEEE would yield NaN).
@@ -20,9 +21,11 @@ const BLOCK_ELEMENTS: usize = 256;
 pub fn dequantize_q4k_block(
     block: &[u8],
     out: &mut [f32],
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), EngineError> {
     if out.len() < BLOCK_ELEMENTS {
-        return Err("Q4K block output buffer too small".into());
+        return Err(EngineError::Tensor(
+            "Q4K block output buffer too small".into(),
+        ));
     }
 
     let d = f16_to_f32(u16::from_le_bytes([block[0], block[1]]));
@@ -68,12 +71,14 @@ pub fn dequantize_q4k_block(
 pub fn dequantize_q6k_block(
     block: &[u8],
     out: &mut [f32],
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), EngineError> {
     if block.len() < Q6K_BLOCK_SIZE {
-        return Err("Q6K block buffer too small".into());
+        return Err(EngineError::Tensor("Q6K block buffer too small".into()));
     }
     if out.len() < BLOCK_ELEMENTS {
-        return Err("Q6K block output buffer too small".into());
+        return Err(EngineError::Tensor(
+            "Q6K block output buffer too small".into(),
+        ));
     }
 
     let ql = &block[0..128];

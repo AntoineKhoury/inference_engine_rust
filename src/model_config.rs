@@ -1,3 +1,4 @@
+use crate::EngineError;
 use crate::model_loader::gguf_types::{Data, GGUFData};
 
 /// Tokenizer special-token policy read from GGUF (same keys as llama.cpp / `tokenizer.ggml.*`).
@@ -31,7 +32,7 @@ impl TokenizerPromptConfig {
     /// SentencePiece / `tokenizer.ggml.model == "llama"`, the implicit defaults are **add BOS**,
     /// **no EOS** on encode, unless `tokenizer.ggml.add_bos_token` / `add_eos_token` override them.
     /// Many GGUFs (including some Mistral builds) omit those override keys entirely.
-    pub fn from_gguf(gguf: &GGUFData) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn from_gguf(gguf: &GGUFData) -> Result<Self, EngineError> {
         let tokenizer_model = get_string(gguf, "tokenizer.ggml.model").unwrap_or_default();
         let (default_bos, default_eos) = defaults_for_tokenizer_model(tokenizer_model.as_str());
 
@@ -78,7 +79,7 @@ pub struct ModelConfig {
 }
 
 impl ModelConfig {
-    pub fn from_gguf(gguf: &GGUFData) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn from_gguf(gguf: &GGUFData) -> Result<Self, EngineError> {
         let context_length = get_usize(gguf, "llama.context_length")?;
         let hidden_dim = get_usize(gguf, "llama.embedding_length")?;
         let n_layers = get_usize(gguf, "llama.block_count")?;
@@ -92,18 +93,14 @@ impl ModelConfig {
             .or_else(|_| get_array_len(gguf, "tokenizer.ggml.tokens"))?;
 
         if hidden_dim % n_heads != 0 {
-            return Err(format!(
-                "hidden_dim {} not divisible by n_heads {}",
-                hidden_dim, n_heads
-            )
-            .into());
+            return Err(EngineError::Model(format!(
+                "hidden_dim {hidden_dim} not divisible by n_heads {n_heads}"
+)));
         }
         if n_heads % n_kv_heads != 0 {
-            return Err(format!(
-                "GQA requires n_heads ({}) divisible by n_kv_heads ({})",
-                n_heads, n_kv_heads
-            )
-            .into());
+            return Err(EngineError::Model(format!(
+                "GQA requires n_heads ({n_heads}) divisible by n_kv_heads ({n_kv_heads})"
+            )));
         }
         let head_dim = hidden_dim / n_heads;
 
@@ -137,7 +134,7 @@ impl ModelConfig {
     }
 }
 
-fn get_usize(gguf: &GGUFData, key: &str) -> Result<usize, Box<dyn std::error::Error>> {
+fn get_usize(gguf: &GGUFData, key: &str) -> Result<usize, EngineError> {
     match gguf.get_metadata(key) {
         Some(Data::Uint32(v)) => Ok(*v as usize),
         Some(Data::Int32(v)) => Ok(*v as usize),
@@ -147,25 +144,31 @@ fn get_usize(gguf: &GGUFData, key: &str) -> Result<usize, Box<dyn std::error::Er
         Some(Data::Int16(v)) => Ok(*v as usize),
         Some(Data::Uint8(v)) => Ok(*v as usize),
         Some(Data::Int8(v)) => Ok(*v as usize),
-        Some(_) => Err(format!("Metadata key '{}' is not an integer", key).into()),
-        None => Err(format!("Missing metadata key '{}'", key).into()),
+        Some(_) => Err(EngineError::Model(format!(
+            "metadata key '{key}' is not an integer"
+        ))),
+        None => Err(EngineError::Model(format!("missing metadata key '{key}'"))),
     }
 }
 
-fn get_f32(gguf: &GGUFData, key: &str) -> Result<f32, Box<dyn std::error::Error>> {
+fn get_f32(gguf: &GGUFData, key: &str) -> Result<f32, EngineError> {
     match gguf.get_metadata(key) {
         Some(Data::Float32(v)) => Ok(*v),
         Some(Data::Float64(v)) => Ok(*v as f32),
-        Some(_) => Err(format!("Metadata key '{}' is not a float", key).into()),
-        None => Err(format!("Missing metadata key '{}'", key).into()),
+        Some(_) => Err(EngineError::Model(format!(
+            "metadata key '{key}' is not a float"
+        ))),
+        None => Err(EngineError::Model(format!("missing metadata key '{key}'"))),
     }
 }
 
-fn get_array_len(gguf: &GGUFData, key: &str) -> Result<usize, Box<dyn std::error::Error>> {
+fn get_array_len(gguf: &GGUFData, key: &str) -> Result<usize, EngineError> {
     match gguf.get_metadata(key) {
         Some(Data::Array(v)) => Ok(v.len()),
-        Some(_) => Err(format!("Metadata key '{}' is not an array", key).into()),
-        None => Err(format!("Missing metadata key '{}'", key).into()),
+        Some(_) => Err(EngineError::Model(format!(
+            "metadata key '{key}' is not an array"
+        ))),
+        None => Err(EngineError::Model(format!("missing metadata key '{key}'"))),
     }
 }
 

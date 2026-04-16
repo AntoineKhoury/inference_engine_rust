@@ -1,13 +1,14 @@
+use crate::EngineError;
+
 pub fn softmax(
     input: &[f32],
     output: &mut [f32]
-) -> Result<(), Box<dyn std::error::Error>>{
+) -> Result<(), EngineError> {
     #[cfg(debug_assertions)]
     debug_assert_eq!(input.len(), output.len(), "Dimenssion mismatch at softmax");
 
-    // Check if we have at least one element
-    if input.is_empty(){
-        panic!("Empty input")
+    if input.is_empty() {
+        return Err(EngineError::Op("softmax: empty input".into()));
     }
 
     // Find max value for numerical stability

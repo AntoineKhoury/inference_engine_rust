@@ -1,3 +1,4 @@
+use crate::EngineError;
 use crate::layers::embeddings::lookup_embeddings;
 use crate::layers::prefill_block::{decode_layer_block, prefill_layer_block};
 use crate::model_config::ModelConfig;
@@ -20,22 +21,19 @@ impl PrefillState {
     pub fn from_embeddings(
         embeddings: Vec<Vec<f32>>,
         hidden_dim: usize,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ) -> Result<Self, EngineError> {
         let seq_len = embeddings.len();
         if seq_len == 0 {
-            return Err("PrefillState: empty embeddings".into());
+            return Err(EngineError::Model("PrefillState: empty embeddings".into()));
         }
 
         let mut hidden = Vec::with_capacity(seq_len * hidden_dim);
         for (idx, row) in embeddings.into_iter().enumerate() {
             if row.len() != hidden_dim {
-                return Err(format!(
-                    "PrefillState: embedding {} has dim {}, expected {}",
-                    idx,
+                return Err(EngineError::Model(format!(
+                    "PrefillState: embedding {idx} has dim {}, expected {hidden_dim}",
                     row.len(),
-                    hidden_dim
-                )
-                .into());
+                )));
             }
             hidden.extend_from_slice(&row);
         }
@@ -67,20 +65,21 @@ impl PrefillState {
         hidden: Vec<f32>,
         seq_len: usize,
         hidden_dim: usize,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ) -> Result<Self, EngineError> {
         if seq_len == 0 {
-            return Err("PrefillState: seq_len must be > 0".into());
+            return Err(EngineError::Model(
+                "PrefillState: seq_len must be > 0".into(),
+            ));
         }
         let expected_len = seq_len
             .checked_mul(hidden_dim)
-            .ok_or("PrefillState: seq_len * hidden_dim overflow")?;
+            .ok_or_else(|| EngineError::Model("PrefillState: seq_len * hidden_dim overflow".into()))?;
         if hidden.len() != expected_len {
-            return Err(format!(
+            return Err(EngineError::Model(format!(
                 "PrefillState: hidden len {} != expected {}",
                 hidden.len(),
                 expected_len
-            )
-            .into());
+            )));
         }
         Ok(Self {
             seq_len,
@@ -89,17 +88,21 @@ impl PrefillState {
         })
     }
 
-    pub fn row(&self, idx: usize) -> Result<&[f32], Box<dyn std::error::Error>> {
+    pub fn row(&self, idx: usize) -> Result<&[f32], EngineError> {
         if idx >= self.seq_len {
-            return Err("PrefillState: row index out of bounds".into());
+            return Err(EngineError::Model(
+                "PrefillState: row index out of bounds".into(),
+            ));
         }
         let start = idx * self.hidden_dim;
         Ok(&self.hidden[start..start + self.hidden_dim])
     }
 
-    pub fn row_mut(&mut self, idx: usize) -> Result<&mut [f32], Box<dyn std::error::Error>> {
+    pub fn row_mut(&mut self, idx: usize) -> Result<&mut [f32], EngineError> {
         if idx >= self.seq_len {
-            return Err("PrefillState: row index out of bounds".into());
+            return Err(EngineError::Model(
+                "PrefillState: row index out of bounds".into(),
+            ));
         }
         let start = idx * self.hidden_dim;
         Ok(&mut self.hidden[start..start + self.hidden_dim])
@@ -111,17 +114,16 @@ pub fn prefill_from_tokens(
     file_path: &str,
     config: &ModelConfig,
     token_ids: &[u32],
-) -> Result<PrefillState, Box<dyn std::error::Error>> {
+) -> Result<PrefillState, EngineError> {
     if token_ids.is_empty() {
-        return Err("prefill: empty token list".into());
+        return Err(EngineError::Model("prefill: empty token list".into()));
     }
     if token_ids.len() > config.context_length {
-        return Err(format!(
+        return Err(EngineError::Model(format!(
             "prefill: token length {} exceeds context length {}",
             token_ids.len(),
             config.context_length
-        )
-        .into());
+        )));
     }
 
     let embeddings = lookup_embeddings(gguf, file_path, token_ids)?;
@@ -133,9 +135,11 @@ pub fn prefill_forward(
     config: &ModelConfig,
     weights: &ModelWeights,
     kv_caches: &mut [KVCache],
-) -> Result<PrefillState, Box<dyn std::error::Error>> {
+) -> Result<PrefillState, EngineError> {
     if kv_caches.len() != weights.layers.len() {
-        return Err("prefill_forward: kv_caches len != number of layers".into());
+        return Err(EngineError::Model(
+            "prefill_forward: kv_caches len != number of layers".into(),
+        ));
     }
 
     let mut state = PrefillState::from_flat(
@@ -159,12 +163,16 @@ pub fn decode_forward(
     config: &ModelConfig,
     weights: &ModelWeights,
     kv_caches: &mut [KVCache],
-) -> Result<PrefillState, Box<dyn std::error::Error>> {
+) -> Result<PrefillState, EngineError> {
     if input.seq_len() != 1 {
-        return Err("decode_forward: seq_len must be 1".into());
+        return Err(EngineError::Model(
+            "decode_forward: seq_len must be 1".into(),
+        ));
     }
     if kv_caches.len() != weights.layers.len() {
-        return Err("decode_forward: kv_caches len != number of layers".into());
+        return Err(EngineError::Model(
+            "decode_forward: kv_caches len != number of layers".into(),
+        ));
     }
 
     let mut state = PrefillState::from_flat(
@@ -189,7 +197,7 @@ pub fn decode_from_embedding_row(
     config: &ModelConfig,
     weights: &ModelWeights,
     kv_caches: &mut [KVCache],
-) -> Result<PrefillState, Box<dyn std::error::Error>> {
+) -> Result<PrefillState, EngineError> {
     let input = PrefillState::from_flat(embedding_row, 1, config.hidden_dim)?;
     decode_forward(&input, config, weights, kv_caches)
 }
@@ -198,11 +206,13 @@ pub fn final_logits_last_token(
     input: &PrefillState,
     config: &ModelConfig,
     weights: &ModelWeights,
-) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
+) -> Result<Vec<f32>, EngineError> {
     let seq_len = input.seq_len();
     let hidden_dim = input.hidden_dim();
     if seq_len == 0 {
-        return Err("final_logits_last_token: empty input".into());
+        return Err(EngineError::Model(
+            "final_logits_last_token: empty input".into(),
+        ));
     }
 
     let last_start = (seq_len - 1) * hidden_dim;
@@ -211,12 +221,11 @@ pub fn final_logits_last_token(
 
     let norm_weights = weights.output_norm.as_f32_slice()?;
     if norm_weights.len() != hidden_dim {
-        return Err(format!(
+        return Err(EngineError::Model(format!(
             "final_logits_last_token: output_norm len {} != hidden_dim {}",
             norm_weights.len(),
             hidden_dim
-        )
-        .into());
+        )));
     }
 
     let mut normed = vec![0.0f32; hidden_dim];

@@ -9,6 +9,7 @@
 use std::path::PathBuf;
 
 use clap::Parser;
+use inference_engine_rust::EngineError;
 use inference_engine_rust::layers::attention::KVCache;
 use inference_engine_rust::layers::embeddings::lookup_embeddings_loaded;
 use inference_engine_rust::model_config::{ModelConfig, TokenizerPromptConfig};
@@ -41,7 +42,7 @@ struct Args {
     prompt: Option<String>,
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), EngineError> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
 
     let args = Args::parse();
@@ -49,7 +50,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let prompt = match args.prompt {
         Some(p) if !p.trim().is_empty() => p,
         Some(_) => {
-            return Err("prompt is empty".into());
+            return Err(EngineError::Model("prompt is empty".into()));
         }
         None => {
             use std::io::BufRead;
@@ -61,20 +62,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     if prompt.is_empty() {
-        return Err("no prompt: pass PROMPT or pipe a line on stdin".into());
+        return Err(EngineError::Model(
+            "no prompt: pass PROMPT or pipe a line on stdin".into(),
+        ));
     }
 
     if !args.model.is_file() {
-        return Err(format!("model file not found: {}", args.model.display()).into());
+        return Err(EngineError::Model(format!(
+            "model file not found: {}",
+            args.model.display()
+        )));
     }
     if !args.tokenizer.is_file() {
-        return Err(format!("tokenizer file not found: {}", args.tokenizer.display()).into());
+        return Err(EngineError::Model(format!(
+            "tokenizer file not found: {}",
+            args.tokenizer.display()
+        )));
     }
 
     let model_path = args
         .model
         .to_str()
-        .ok_or("model path is not valid UTF-8")?;
+        .ok_or_else(|| EngineError::Model("model path is not valid UTF-8".into()))?;
     let mut gguf = read_file(model_path)?;
 
     let mut tokenizer = Tokenizer::load_from_file(&args.tokenizer)?;
