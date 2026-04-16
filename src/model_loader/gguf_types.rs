@@ -1,5 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
+
 use crate::core::tensor::Tensor;
+use crate::EngineError;
 
 #[derive(Debug, Clone)]
 pub enum Data {
@@ -92,7 +94,7 @@ impl GGUFData {
     /// Load all tensors from the GGUF file
     /// Opens the file, reads tensor data based on tensors_metadata, and populates the tensors HashMap
     /// Uses a larger buffer (1MB) for better I/O performance
-    pub fn load_tensors(&mut self, file_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn load_tensors(&mut self, file_path: &str) -> Result<(), EngineError> {
         use crate::model_loader::tensor_loader::load_tensor;
         use std::fs::File;
         use std::io::BufReader;
@@ -114,15 +116,19 @@ impl GGUFData {
             info!("Loading tensor {}/{} ({}%): {} (offset: {}, type_id: {})", 
                   idx + 1, total_tensors, progress, tensor_info.name, tensor_info.offset, tensor_info.type_id);
             
-            let tensor = match load_tensor(&mut reader, tensor_info, self.tensor_data_offset) {
-                Ok(t) => t,
-                Err(e) => {
-                    return Err(format!(
-                        "Failed to load tensor {}/{} '{}' (offset: {}, type_id: {}): {}",
-                        idx + 1, total_tensors, tensor_info.name, tensor_info.offset, tensor_info.type_id, e
-                    ).into());
-                }
-            };
+            let tensor = load_tensor(&mut reader, tensor_info, self.tensor_data_offset).map_err(
+                |e| {
+                    EngineError::Gguf(format!(
+                        "tensor {}/{} '{}' (offset {}, type_id {}): {}",
+                        idx + 1,
+                        total_tensors,
+                        tensor_info.name,
+                        tensor_info.offset,
+                        tensor_info.type_id,
+                        e
+                    ))
+                },
+            )?;
             self.tensors.insert(tensor_info.name.clone(), tensor);
         }
         
@@ -144,7 +150,7 @@ impl GGUFData {
     /// - Seeks directly to the tensor's offset in the file
     /// - Only reads that one tensor's data
     /// - Much faster than loading all 291 tensors when you only need one
-    pub fn load_single_tensor(&mut self, file_path: &str, tensor_name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn load_single_tensor(&mut self, file_path: &str, tensor_name: &str) -> Result<(), EngineError> {
         use crate::model_loader::tensor_loader::load_tensor;
         use std::fs::File;
         use std::io::BufReader;
@@ -153,7 +159,9 @@ impl GGUFData {
         let tensor_info = self.tensors_metadata
             .iter()
             .find(|t| t.name == tensor_name)
-            .ok_or_else(|| format!("Tensor '{}' not found in model metadata", tensor_name))?;
+            .ok_or_else(|| {
+                EngineError::Model(format!("tensor '{tensor_name}' not found in model metadata"))
+            })?;
         
         // Check if already loaded
         if self.tensors.contains_key(tensor_name) {
@@ -180,7 +188,7 @@ impl GGUFData {
         &mut self,
         file_path: &str,
         tensor_names: &[String],
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), EngineError> {
         use crate::model_loader::tensor_loader::load_tensor;
         use std::fs::File;
         use std::io::BufReader;
@@ -194,7 +202,9 @@ impl GGUFData {
                 .tensors_metadata
                 .iter()
                 .position(|t| t.name == name.as_str())
-                .ok_or_else(|| format!("Tensor '{}' not found in model metadata", name))?;
+                .ok_or_else(|| {
+                    EngineError::Model(format!("tensor '{name}' not found in model metadata"))
+                })?;
             indices.push(idx);
         }
         if indices.is_empty() {

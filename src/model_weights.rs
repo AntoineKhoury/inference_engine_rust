@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use crate::EngineError;
 use crate::core::tensor::Tensor;
 use crate::model_config::ModelConfig;
 use crate::model_loader::gguf_types::GGUFData;
@@ -29,7 +30,7 @@ impl<'a> ModelWeights<'a> {
     pub fn from_loaded(
         gguf: &'a GGUFData,
         names: &ModelWeightNames,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ) -> Result<Self, EngineError> {
         let mut layers = Vec::with_capacity(names.layers.len());
         for layer in &names.layers {
             layers.push(LayerWeights {
@@ -79,7 +80,7 @@ impl ModelWeightNames {
     pub fn resolve(
         gguf: &GGUFData,
         config: &ModelConfig,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ) -> Result<Self, EngineError> {
         let available = available_tensor_names(gguf);
 
         let token_embeddings = resolve_name_from_strs(
@@ -158,7 +159,7 @@ impl ModelWeightNames {
         &self,
         gguf: &mut GGUFData,
         file_path: &str,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), EngineError> {
         let mut names_to_load = Vec::new();
         names_to_load.push(self.token_embeddings.clone());
         names_to_load.push(self.output_norm.clone());
@@ -191,39 +192,36 @@ fn available_tensor_names(gguf: &GGUFData) -> HashSet<String> {
 fn resolve_name_from_strs(
     available: &HashSet<String>,
     candidates: &[&str],
-) -> Result<String, Box<dyn std::error::Error>> {
+) -> Result<String, EngineError> {
     for candidate in candidates {
         if available.contains(*candidate) {
             return Ok(candidate.to_string());
         }
     }
-    Err(format!(
-        "None of the candidate tensor names were found: {:?}",
-        candidates
-    )
-    .into())
+    Err(EngineError::Model(format!(
+        "none of the candidate tensor names were found: {candidates:?}"
+    )))
 }
 
 fn resolve_name_from_strings(
     available: &HashSet<String>,
     candidates: &[String],
-) -> Result<String, Box<dyn std::error::Error>> {
+) -> Result<String, EngineError> {
     for candidate in candidates {
         if available.contains(candidate) {
             return Ok(candidate.clone());
         }
     }
-    Err(format!(
-        "None of the candidate tensor names were found: {:?}",
-        candidates
-    )
-    .into())
+    Err(EngineError::Model(format!(
+        "none of the candidate tensor names were found: {candidates:?}"
+    )))
 }
 
 fn get_loaded<'a>(
     gguf: &'a GGUFData,
     name: &str,
-) -> Result<&'a Tensor, Box<dyn std::error::Error>> {
-    gguf.get_tensor(name)
-        .ok_or_else(|| format!("Tensor '{}' not found after loading", name).into())
+) -> Result<&'a Tensor, EngineError> {
+    gguf.get_tensor(name).ok_or_else(|| {
+        EngineError::Model(format!("tensor '{name}' not found after loading"))
+    })
 }

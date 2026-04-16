@@ -1,3 +1,4 @@
+use crate::EngineError;
 use crate::model_loader::gguf_types::GGUFData;
 use crate::core::tensor::{Tensor, TensorType};
 use crate::ops::quant::quant_K_handler::{
@@ -50,7 +51,7 @@ pub fn lookup_embeddings(
     gguf_data: &mut GGUFData,
     file_path: &str,
     token_ids: &[u32],
-) -> Result<Vec<Vec<f32>>, Box<dyn std::error::Error>> {
+) -> Result<Vec<Vec<f32>>, EngineError> {
     let embedding_tensor_name = resolve_embedding_tensor_name(gguf_data)?;
 
     if gguf_data.get_tensor(embedding_tensor_name).is_none() {
@@ -67,20 +68,20 @@ pub fn lookup_embeddings(
 pub fn lookup_embeddings_loaded(
     gguf_data: &GGUFData,
     token_ids: &[u32],
-) -> Result<Vec<Vec<f32>>, Box<dyn std::error::Error>> {
+) -> Result<Vec<Vec<f32>>, EngineError> {
     let embedding_tensor_name = resolve_embedding_tensor_name(gguf_data)?;
     let embedding_tensor = gguf_data
         .get_tensor(embedding_tensor_name)
-        .ok_or_else(|| {
-            format!(
-                "Embedding tensor '{embedding_tensor_name}' not loaded; call load_single_tensor or lookup_embeddings first"
-            )
+               .ok_or_else(|| {
+            EngineError::Model(format!(
+                "embedding tensor '{embedding_tensor_name}' not loaded; call load_single_tensor or lookup_embeddings first"
+            ))
         })?;
 
     lookup_embedding_rows(embedding_tensor, token_ids)
 }
 
-fn resolve_embedding_tensor_name(gguf_data: &GGUFData) -> Result<&'static str, Box<dyn std::error::Error>> {
+fn resolve_embedding_tensor_name(gguf_data: &GGUFData) -> Result<&'static str, EngineError> {
     const NAMES: [&str; 3] = [
         "token_embd.weight",
         "tok_embeddings.weight",
@@ -95,20 +96,22 @@ fn resolve_embedding_tensor_name(gguf_data: &GGUFData) -> Result<&'static str, B
             return Ok(name);
         }
     }
-    Err("Embedding tensor not found in metadata. Expected one of: token_embd.weight, tok_embeddings.weight, embeddings.weight".into())
+    Err(EngineError::Model(
+        "embedding tensor not found in metadata (expected token_embd.weight, tok_embeddings.weight, or embeddings.weight)".into(),
+    ))
 }
 
 fn lookup_embedding_rows(
     embedding_tensor: &Tensor,
     token_ids: &[u32],
-) -> Result<Vec<Vec<f32>>, Box<dyn std::error::Error>> {
+) -> Result<Vec<Vec<f32>>, EngineError> {
     let dims = embedding_tensor.dimensions();
     if dims.len() != 2 {
-        return Err(format!(
-            "Expected 2D embedding tensor, got {}D with shape {:?}",
+        return Err(EngineError::Tensor(format!(
+            "expected 2D embedding tensor, got {}D with shape {:?}",
             dims.len(),
             dims
-        ).into());
+        )));
     }
     
     // Handle both layouts: [vocab_size, hidden_dim] or [hidden_dim, vocab_size]
@@ -124,10 +127,9 @@ fn lookup_embedding_rows(
     // Validate token IDs are within vocabulary range
     for &token_id in token_ids {
         if token_id as usize >= vocab_size {
-            return Err(format!(
-                "Token ID {} is out of vocabulary range [0, {})",
-                token_id, vocab_size
-            ).into());
+            return Err(EngineError::Model(format!(
+                "token ID {token_id} out of vocabulary range [0, {vocab_size})"
+            )));
         }
     }
     
@@ -158,7 +160,9 @@ fn lookup_embedding_rows(
                         let start = block_idx * Q4K_BLOCK_SIZE;
                         let block = buf
                             .get(start..start + Q4K_BLOCK_SIZE)
-                            .ok_or("Q4K embedding block out of bounds")?;
+                            .ok_or_else(|| {
+                                EngineError::Tensor("Q4K embedding block out of bounds".into())
+                            })?;
                         dequantize_q4k_block(block, &mut decoded)?;
                         cached_block = block_idx;
                     }
@@ -180,7 +184,9 @@ fn lookup_embedding_rows(
                         let start = block_idx * Q6K_BLOCK_SIZE;
                         let block = buf
                             .get(start..start + Q6K_BLOCK_SIZE)
-                            .ok_or("Q6K embedding block out of bounds")?;
+                            .ok_or_else(|| {
+                                EngineError::Tensor("Q6K embedding block out of bounds".into())
+                            })?;
                         dequantize_q6k_block(block, &mut decoded)?;
                         cached_block = block_idx;
                     }
@@ -200,16 +206,20 @@ fn lookup_embedding_rows(
 /// 
 /// Note: This requires the embedding tensor to be loaded. Use `load_single_tensor()`
 /// if you haven't loaded all tensors yet.
-pub fn get_embedding_dim(gguf_data: &GGUFData) -> Result<usize, Box<dyn std::error::Error>> {
+pub fn get_embedding_dim(gguf_data: &GGUFData) -> Result<usize, EngineError> {
     let embedding_tensor = gguf_data
         .get_tensor("token_embd.weight")
         .or_else(|| gguf_data.get_tensor("tok_embeddings.weight"))
         .or_else(|| gguf_data.get_tensor("embeddings.weight"))
-        .ok_or("Embedding tensor not found. Load it first with load_single_tensor()")?;
+        .ok_or_else(|| {
+            EngineError::Model(
+                "embedding tensor not found; load it first with load_single_tensor()".into(),
+            )
+        })?;
     
     let dims = embedding_tensor.dimensions();
     if dims.len() != 2 {
-        return Err("Embedding tensor must be 2D".into());
+        return Err(EngineError::Tensor("embedding tensor must be 2D".into()));
     }
     
     // Handle both layouts: [vocab_size, hidden_dim] or [hidden_dim, vocab_size]
@@ -221,16 +231,20 @@ pub fn get_embedding_dim(gguf_data: &GGUFData) -> Result<usize, Box<dyn std::err
 /// 
 /// Note: This requires the embedding tensor to be loaded. Use `load_single_tensor()`
 /// if you haven't loaded all tensors yet.
-pub fn get_vocab_size(gguf_data: &GGUFData) -> Result<usize, Box<dyn std::error::Error>> {
+pub fn get_vocab_size(gguf_data: &GGUFData) -> Result<usize, EngineError> {
     let embedding_tensor = gguf_data
         .get_tensor("token_embd.weight")
         .or_else(|| gguf_data.get_tensor("tok_embeddings.weight"))
         .or_else(|| gguf_data.get_tensor("embeddings.weight"))
-        .ok_or("Embedding tensor not found. Load it first with load_single_tensor()")?;
+        .ok_or_else(|| {
+            EngineError::Model(
+                "embedding tensor not found; load it first with load_single_tensor()".into(),
+            )
+        })?;
     
     let dims = embedding_tensor.dimensions();
     if dims.len() != 2 {
-        return Err("Embedding tensor must be 2D".into());
+        return Err(EngineError::Tensor("embedding tensor must be 2D".into()));
     }
     
     // Handle both layouts: [vocab_size, hidden_dim] or [hidden_dim, vocab_size]

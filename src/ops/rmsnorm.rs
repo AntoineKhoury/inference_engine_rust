@@ -1,12 +1,14 @@
 // This is the implementation of RMSNorm, over inputs
 // The input should already be dequantized, and the learned weights of the RMSNorm shouldnt be quantized, because their precision matters
 
+use crate::EngineError;
+
 pub fn rmsnorm(
     input: &[f32],
     weights: &[f32],
     epsilon: f32,
     output: &mut [f32]
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), EngineError> {
 
     #[cfg(debug_assertions)]
     debug_assert_eq!(input.len(), weights.len(), "Dimension missmatch for RMSNorm");

@@ -1,12 +1,13 @@
 use std::sync::Arc;
 
+use crate::EngineError;
+
 #[derive(Debug)]
 pub struct Tensor {
     dtype: TensorType,
     buffer: Arc<Vec<u8>>,
     dimensions: Vec<usize>,
     stride: Vec<usize>,
-    offset: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,47 +29,51 @@ impl Tensor {
             buffer,
             dimensions,
             stride,
-            offset: 0,
         }
     }
 
     /// Read a single F32 value from the buffer (little-endian).
-    pub fn f32_at(&self, index: usize) -> Result<f32, Box<dyn std::error::Error>> {
+    pub fn f32_at(&self, index: usize) -> Result<f32, EngineError> {
         if self.dtype != TensorType::F32 {
-            return Err("Tensor dtype is not F32".into());
+            return Err(EngineError::Tensor("dtype is not F32".into()));
         }
         let start = index
             .checked_mul(4)
-            .ok_or("F32 index overflow")?;
+            .ok_or_else(|| EngineError::Tensor("F32 index overflow".into()))?;
         let end = start + 4;
         let bytes = self
             .buffer
             .get(start..end)
-            .ok_or("F32 index out of bounds")?;
-        Ok(f32::from_le_bytes(bytes.try_into()?))
+            .ok_or_else(|| EngineError::Tensor("F32 index out of bounds".into()))?;
+        let arr: [u8; 4] = bytes
+            .try_into()
+            .map_err(|_| EngineError::Tensor("F32 read: expected 4 bytes".into()))?;
+        Ok(f32::from_le_bytes(arr))
     }
 
     /// Return a contiguous F32 slice for row-major tensors.
-    pub fn as_f32_slice(&self) -> Result<&[f32], Box<dyn std::error::Error>> {
+    pub fn as_f32_slice(&self) -> Result<&[f32], EngineError> {
         if self.dtype != TensorType::F32 {
-            return Err("Tensor dtype is not F32".into());
+            return Err(EngineError::Tensor("dtype is not F32".into()));
         }
+        // SAFETY: `words` is only returned if there is no unaligned prefix/suffix.
         let (prefix, words, suffix) = unsafe { self.buffer.as_slice().align_to::<f32>() };
         if !prefix.is_empty() || !suffix.is_empty() {
-            return Err("Tensor buffer is not aligned for F32".into());
+            return Err(EngineError::Tensor("buffer not aligned for F32".into()));
         }
         Ok(words)
     }
 
     /// Return a contiguous mutable F32 slice for row-major tensors.
-    pub fn as_f32_slice_mut(&mut self) -> Result<&mut [f32], Box<dyn std::error::Error>> {
+    pub fn as_f32_slice_mut(&mut self) -> Result<&mut [f32], EngineError> {
         if self.dtype != TensorType::F32 {
-            return Err("Tensor dtype is not F32".into());
+            return Err(EngineError::Tensor("dtype is not F32".into()));
         }
-        let buffer = Arc::get_mut(&mut self.buffer).ok_or("Tensor buffer is shared")?;
+        let buffer = Arc::get_mut(&mut self.buffer)
+            .ok_or_else(|| EngineError::Tensor("buffer is shared (Arc)".into()))?;
         let (prefix, words, suffix) = unsafe { buffer.as_mut_slice().align_to_mut::<f32>() };
         if !prefix.is_empty() || !suffix.is_empty() {
-            return Err("Tensor buffer is not aligned for F32".into());
+            return Err(EngineError::Tensor("buffer not aligned for F32".into()));
         }
         Ok(words)
     }

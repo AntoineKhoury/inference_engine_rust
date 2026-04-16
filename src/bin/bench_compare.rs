@@ -15,6 +15,7 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
+use inference_engine_rust::EngineError;
 use inference_engine_rust::bench_metrics::{
     run_all, run_cold_start, run_llama_completion_ttft_ref, ColdStartMetrics, DecodeThroughputMetrics,
     EngineBench, InteractiveTtftMetrics, LlamaCompletionTtftRef, DEFAULT_BENCH_PROMPT,
@@ -74,31 +75,35 @@ enum Commands {
     },
 }
 
-fn finite_pos_ms(x: f64, name: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn finite_pos_ms(x: f64, name: &str) -> Result<(), EngineError> {
     if !x.is_finite() {
-        return Err(format!("{name} is not finite").into());
+        return Err(EngineError::Model(format!("{name} is not finite")));
     }
     if x < 0.0 {
-        return Err(format!("{name} is negative").into());
+        return Err(EngineError::Model(format!("{name} is negative")));
     }
     Ok(())
 }
 
-fn check_cold(m: &ColdStartMetrics) -> Result<(), Box<dyn std::error::Error>> {
+fn check_cold(m: &ColdStartMetrics) -> Result<(), EngineError> {
     finite_pos_ms(m.gguf_metadata_ms, "cold.gguf_metadata_ms")?;
     finite_pos_ms(m.cold_ttft_ms, "cold.cold_ttft_ms")?;
     finite_pos_ms(m.first_token_ms, "cold.first_token_ms")?;
     if m.prompt_token_count == 0 {
-        return Err("cold.prompt_token_count is zero".into());
+        return Err(EngineError::Model(
+            "cold.prompt_token_count is zero".into(),
+        ));
     }
     Ok(())
 }
 
-fn check_interactive(m: &InteractiveTtftMetrics) -> Result<(), Box<dyn std::error::Error>> {
+fn check_interactive(m: &InteractiveTtftMetrics) -> Result<(), EngineError> {
     finite_pos_ms(m.ttft_infer_ms, "interactive.ttft_infer_ms")?;
     finite_pos_ms(m.ttft_with_tokenizer_ms, "interactive.ttft_with_tokenizer_ms")?;
     if m.prompt_token_count == 0 {
-        return Err("interactive.prompt_token_count is zero".into());
+        return Err(EngineError::Model(
+            "interactive.prompt_token_count is zero".into(),
+        ));
     }
     Ok(())
 }
@@ -106,23 +111,22 @@ fn check_interactive(m: &InteractiveTtftMetrics) -> Result<(), Box<dyn std::erro
 fn check_decode(
     m: &DecodeThroughputMetrics,
     min_tps: Option<f64>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), EngineError> {
     finite_pos_ms(m.decode_wall_ms, "decode.decode_wall_ms")?;
     if !m.decode_tokens_per_sec.is_finite() {
-        return Err("decode.decode_tokens_per_sec is not finite".into());
+        return Err(EngineError::Model(
+            "decode.decode_tokens_per_sec is not finite".into(),
+        ));
     }
     if m.decode_tokens == 0 {
-        return Err("decode.decode_tokens is zero".into());
+        return Err(EngineError::Model("decode.decode_tokens is zero".into()));
     }
     if let Some(min) = min_tps {
         if m.decode_tokens_per_sec < min {
-            return Err(
-                format!(
-                    "decode.decode_tokens_per_sec {:.3} < --min-decode-tps {:.3}",
-                    m.decode_tokens_per_sec, min
-                )
-                .into(),
-            );
+            return Err(EngineError::Model(format!(
+                "decode.decode_tokens_per_sec {:.3} < --min-decode-tps {:.3}",
+                m.decode_tokens_per_sec, min
+            )));
         }
     }
     Ok(())
@@ -183,7 +187,7 @@ fn print_decode_human(m: &DecodeThroughputMetrics) {
     println!("  prefill_tokens_per_s: {:.3}  (rough pp analog)", pps);
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), EngineError> {
     let cli = Cli::parse();
 
     if cli.compare_llama && !matches!(cli.command, Commands::InteractiveTtft) {

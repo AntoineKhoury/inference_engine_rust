@@ -1,4 +1,5 @@
 use crate::core::tensor::TensorType;
+use crate::EngineError;
 
 #[allow(non_camel_case_types)]
 #[repr(u32)]
@@ -40,7 +41,7 @@ pub enum GgmlType {
 }
 
 impl TryFrom<u32> for GgmlType {
-    type Error = Box<dyn std::error::Error>;
+    type Error = EngineError;
 
     fn try_from(value: u32) -> Result<Self, Self::Error> {
         match value {
@@ -77,18 +78,20 @@ impl TryFrom<u32> for GgmlType {
             35 => Ok(GgmlType::TQ2_0),
             39 => Ok(GgmlType::MXFP4),
             40 => Ok(GgmlType::COUNT),
-            _ => Err(format!("Unknown GGML type id: {}", value).into()),
+            _ => Err(EngineError::Gguf(format!("unknown GGML type id: {value}"))),
         }
     }
 }
 
 impl GgmlType {
-    pub fn to_tensor_type(self) -> Result<TensorType, Box<dyn std::error::Error>> {
+    pub fn to_tensor_type(self) -> Result<TensorType, EngineError> {
         match self {
             GgmlType::F32 => Ok(TensorType::F32),
             GgmlType::Q4_K => Ok(TensorType::Q4K),
             GgmlType::Q6_K => Ok(TensorType::Q6K),
-            _ => Err(format!("Unsupported GGML type for inference: {:?}", self).into()),
+            _ => Err(EngineError::Tensor(format!(
+                "unsupported GGML type for inference: {self:?}"
+            ))),
         }
     }
 }

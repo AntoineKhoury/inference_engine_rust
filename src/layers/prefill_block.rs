@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::EngineError;
 use crate::core::tensor::{Tensor, TensorType};
 use crate::layers::attention::{decode_attention_layer, prefill_attention_layer, KVCache};
 use crate::model_config::ModelConfig;
@@ -15,18 +16,17 @@ pub fn prefill_attention_with_norm(
     config: &ModelConfig,
     weights: &LayerWeights,
     kv_cache: &mut KVCache,
-) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
+) -> Result<Vec<f32>, EngineError> {
     let seq_len = input.seq_len();
     let hidden_dim = input.hidden_dim();
 
     let attn_norm_weights = weights.attn_norm.as_f32_slice()?;
     if attn_norm_weights.len() != hidden_dim {
-        return Err(format!(
+        return Err(EngineError::Model(format!(
             "attn_norm weights len {} != hidden_dim {}",
             attn_norm_weights.len(),
             hidden_dim
-        )
-        .into());
+        )));
     }
 
     let mut normed = vec![0.0f32; seq_len * hidden_dim];
@@ -55,12 +55,16 @@ pub fn prefill_ffn(
     hidden_dim: usize,
     config: &ModelConfig,
     weights: &LayerWeights,
-) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
+) -> Result<Vec<f32>, EngineError> {
     if input.len() != seq_len * hidden_dim {
-        return Err("prefill_ffn: input length does not match shape".into());
+        return Err(EngineError::Model(
+            "prefill_ffn: input length does not match shape".into(),
+        ));
     }
     if hidden_dim != config.hidden_dim {
-        return Err("prefill_ffn: hidden_dim mismatch with config".into());
+        return Err(EngineError::Model(
+            "prefill_ffn: hidden_dim mismatch with config".into(),
+        ));
     }
 
     let input_tensor = tensor_from_f32_slice(input, vec![seq_len, hidden_dim]);
@@ -89,15 +93,14 @@ pub fn prefill_ffn_with_norm(
     hidden_dim: usize,
     config: &ModelConfig,
     weights: &LayerWeights,
-) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
+) -> Result<Vec<f32>, EngineError> {
     let ffn_norm_weights = weights.ffn_norm.as_f32_slice()?;
     if ffn_norm_weights.len() != hidden_dim {
-        return Err(format!(
+        return Err(EngineError::Model(format!(
             "ffn_norm weights len {} != hidden_dim {}",
             ffn_norm_weights.len(),
             hidden_dim
-        )
-        .into());
+        )));
     }
 
     let mut normed = vec![0.0f32; seq_len * hidden_dim];
@@ -123,7 +126,7 @@ pub fn prefill_layer_block(
     config: &ModelConfig,
     weights: &LayerWeights,
     kv_cache: &mut KVCache,
-) -> Result<PrefillState, Box<dyn std::error::Error>> {
+) -> Result<PrefillState, EngineError> {
     let attn_out = prefill_attention_with_norm(input, config, weights, kv_cache)?;
     let seq_len = input.seq_len();
     let hidden_dim = input.hidden_dim();
@@ -136,20 +139,21 @@ pub fn decode_attention_with_norm(
     config: &ModelConfig,
     weights: &LayerWeights,
     kv_cache: &mut KVCache,
-) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
+) -> Result<Vec<f32>, EngineError> {
     if input.seq_len() != 1 {
-        return Err("decode_attention_with_norm: seq_len must be 1".into());
+        return Err(EngineError::Model(
+            "decode_attention_with_norm: seq_len must be 1".into(),
+        ));
     }
     let hidden_dim = input.hidden_dim();
 
     let attn_norm_weights = weights.attn_norm.as_f32_slice()?;
     if attn_norm_weights.len() != hidden_dim {
-        return Err(format!(
+        return Err(EngineError::Model(format!(
             "attn_norm weights len {} != hidden_dim {}",
             attn_norm_weights.len(),
             hidden_dim
-        )
-        .into());
+        )));
     }
 
     let mut normed = vec![0.0f32; hidden_dim];
@@ -173,9 +177,11 @@ pub fn decode_layer_block(
     config: &ModelConfig,
     weights: &LayerWeights,
     kv_cache: &mut KVCache,
-) -> Result<PrefillState, Box<dyn std::error::Error>> {
+) -> Result<PrefillState, EngineError> {
     if input.seq_len() != 1 {
-        return Err("decode_layer_block: seq_len must be 1".into());
+        return Err(EngineError::Model(
+            "decode_layer_block: seq_len must be 1".into(),
+        ));
     }
     let hidden_dim = input.hidden_dim();
     let attn_out = decode_attention_with_norm(input, config, weights, kv_cache)?;

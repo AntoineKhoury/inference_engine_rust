@@ -1,3 +1,7 @@
+pub mod error;
+
+pub use error::EngineError;
+
 pub mod ops;
 pub mod tokenizer;
 pub mod layers;

@@ -1,7 +1,9 @@
+use crate::EngineError;
+
 pub fn sigmoid(
     input: &[f32],
     output: &mut [f32]
-) -> Result<(), Box<dyn std::error::Error>>{
+) -> Result<(), EngineError> {
     #[cfg(debug_assertions)]
     debug_assert_eq!(input.len(), output.len(), "Dimension mismatch for sigmoid");
     
@@ -26,7 +28,7 @@ pub fn swiglu(
     gate: &[f32],
     up: &[f32],
     output: &mut [f32],
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), EngineError> {
     #[cfg(debug_assertions)]
     debug_assert_eq!(gate.len(), up.len(), "Dimension mismatch for SwiGLU");
 
