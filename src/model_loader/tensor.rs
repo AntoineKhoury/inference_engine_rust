@@ -89,6 +89,7 @@ impl GgmlType {
             GgmlType::F32 => Ok(TensorType::F32),
             GgmlType::Q4_K => Ok(TensorType::Q4K),
             GgmlType::Q6_K => Ok(TensorType::Q6K),
+            GgmlType::Q8_0 => Ok(TensorType::Q8_0),
             _ => Err(EngineError::Tensor(format!(
                 "unsupported GGML type for inference: {self:?}"
             ))),

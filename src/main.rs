@@ -3,39 +3,50 @@
 //! ```text
 //! cargo run --release -- --help
 //! cargo run --release -- "Rust will rule the"
-//! cargo run --release -- -n 32 -m model/mistral-7b-v0.1.Q4_K_M.gguf "Hello"
+//! cargo run --release -- -n 32 -m model/mistral-7b-v0.1/mistral-7b-v0.1.Q4_K_M.gguf "Hello"
+//! cargo run --release -- --chat gemma4-e2b -m model/gemma-4-e2b-it/gemma-4-E2B-it-Q8_0.gguf \
+//!   -t model/gemma-4-e2b-it/tokenizer.json "Hello"
 //! ```
 
 use std::path::PathBuf;
 
 use clap::Parser;
 use inference_engine_rust::EngineError;
-use inference_engine_rust::layers::attention::KVCache;
-use inference_engine_rust::layers::embeddings::lookup_embeddings_loaded;
+use inference_engine_rust::layers::attention::kv_caches_for_config;
 use inference_engine_rust::model_config::{ModelConfig, TokenizerPromptConfig};
 use inference_engine_rust::model_loader::file_loader::read_file;
 use inference_engine_rust::model_weights::{ModelWeightNames, ModelWeights};
 use inference_engine_rust::prefill::{
-    decode_forward, final_logits_last_token, prefill_forward, prefill_from_tokens, PrefillState,
+    decode_forward, final_logits_last_token, prefill_forward, prefill_from_tokens,
+    prefill_state_for_single_token_loaded,
 };
 use inference_engine_rust::sampling::sample_greedy;
+use inference_engine_rust::chat_prompt::ChatPromptStyle;
 use inference_engine_rust::tokenizer::Tokenizer;
 
 #[derive(Parser, Debug)]
 #[command(name = "inference_engine_rust")]
-#[command(about = "Greedy LM generation (GGUF + tokenizer.model)", long_about = None)]
+#[command(about = "Greedy LM generation (GGUF + tokenizer .model or .json)", long_about = None)]
 struct Args {
     /// GGUF model path (relative to cwd is fine)
-    #[arg(short, long, default_value = "model/mistral-7b-v0.1.Q4_K_M.gguf")]
+    #[arg(
+        short,
+        long,
+        default_value = "model/mistral-7b-v0.1/mistral-7b-v0.1.Q4_K_M.gguf"
+    )]
     model: PathBuf,
 
-    /// SentencePiece tokenizer file (e.g. tokenizer.model)
-    #[arg(short, long, default_value = "tokenizer.model")]
+    /// Tokenizer: SentencePiece `tokenizer.model` or Hugging Face `tokenizer.json`
+    #[arg(short, long, default_value = "model/mistral-7b-v0.1/tokenizer.model")]
     tokenizer: PathBuf,
 
     /// How many new tokens to append after the prompt
     #[arg(short = 'n', long, default_value_t = 20)]
     new_tokens: usize,
+
+    /// Wrap PROMPT for instruct/chat: `raw` (default), `mistral-instruct`, `gemma4-e2b`
+    #[arg(long, default_value = "raw")]
+    chat: String,
 
     /// Prompt text. If omitted, one line is read from stdin
     #[arg(value_name = "PROMPT")]
@@ -67,6 +78,14 @@ fn main() -> Result<(), EngineError> {
         ));
     }
 
+    let chat_style = ChatPromptStyle::parse(&args.chat).ok_or_else(|| {
+        EngineError::Model(format!(
+            "unknown --chat {:?}: use raw | mistral-instruct | gemma4-e2b",
+            args.chat
+        ))
+    })?;
+    let prompt = chat_style.wrap(&prompt);
+
     if !args.model.is_file() {
         return Err(EngineError::Model(format!(
             "model file not found: {}",
@@ -97,9 +116,7 @@ fn main() -> Result<(), EngineError> {
     let prefill_in = prefill_from_tokens(&mut gguf, model_path, &config, &prompt_ids)?;
     let weights = ModelWeights::from_loaded(&gguf, &names)?;
 
-    let mut kv_caches: Vec<KVCache> = (0..config.n_layers)
-        .map(|_| KVCache::new(config.context_length, config.n_kv_heads, config.head_dim))
-        .collect();
+    let mut kv_caches = kv_caches_for_config(&config);
 
     let mut state = prefill_forward(&prefill_in, &config, &weights, &mut kv_caches)?;
 
@@ -109,8 +126,7 @@ fn main() -> Result<(), EngineError> {
         let next_id = sample_greedy(&logits)?;
         generated.push(next_id);
 
-        let rows = lookup_embeddings_loaded(&gguf, &[next_id])?;
-        let step_in = PrefillState::from_embeddings(rows, config.hidden_dim)?;
+        let step_in = prefill_state_for_single_token_loaded(&gguf, &config, next_id)?;
         state = decode_forward(&step_in, &config, &weights, &mut kv_caches)?;
     }
 

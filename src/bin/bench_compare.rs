@@ -26,11 +26,15 @@ use inference_engine_rust::bench_metrics::{
 #[command(about = "Latency/throughput metrics for the inference engine (vs llama-bench-style comparisons)")]
 struct Cli {
     /// GGUF model path
-    #[arg(short, long, default_value = "model/mistral-7b-v0.1.Q4_K_M.gguf")]
+    #[arg(
+        short,
+        long,
+        default_value = "model/mistral-7b-v0.1/mistral-7b-v0.1.Q4_K_M.gguf"
+    )]
     model: PathBuf,
 
-    /// SentencePiece `tokenizer.model`
-    #[arg(short, long, default_value = "tokenizer.model")]
+    /// `tokenizer.model` (SPM) or `tokenizer.json` (HF)
+    #[arg(short, long, default_value = "model/mistral-7b-v0.1/tokenizer.model")]
     tokenizer: PathBuf,
 
     /// Prompt text (token count should match what you pass to llama-bench `-p`)

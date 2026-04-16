@@ -1,9 +1,9 @@
 /target
 .DS_Store
-model/*
-!model/
+# Large files under model/<name>/ — keep only this README tracked (see model/README.md)
+model/**
+!model/README.md
 /build
-/model
 /_scratch_gguf_ref/
 flamegraph.svg
 

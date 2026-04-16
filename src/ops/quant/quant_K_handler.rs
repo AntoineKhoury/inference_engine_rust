@@ -17,6 +17,27 @@ pub const Q4K_BLOCK_SIZE: usize = 144;
 pub const Q6K_BLOCK_SIZE: usize = 210;
 const BLOCK_ELEMENTS: usize = 256;
 
+/// `block_q8_0` in ggml: fp16 scale `d` + `int8[QK8_0]` with `QK8_0 = 32`.
+pub const Q8_0_BLOCK_ELEMENTS: usize = 32;
+pub const Q8_0_BLOCK_SIZE: usize = 2 + Q8_0_BLOCK_ELEMENTS;
+
+/// Dequantize one Q8_0 block (32 weights). Layout matches ggml `block_q8_0`.
+pub fn dequantize_q8_0_block(block: &[u8], out: &mut [f32]) -> Result<(), EngineError> {
+    if block.len() < Q8_0_BLOCK_SIZE {
+        return Err(EngineError::Tensor("Q8_0 block buffer too small".into()));
+    }
+    if out.len() < Q8_0_BLOCK_ELEMENTS {
+        return Err(EngineError::Tensor(
+            "Q8_0 block output buffer too small".into(),
+        ));
+    }
+    let d = f16_to_f32(u16::from_le_bytes([block[0], block[1]]));
+    for i in 0..Q8_0_BLOCK_ELEMENTS {
+        out[i] = d * (block[2 + i] as i8 as f32);
+    }
+    Ok(())
+}
+
 /// One Q4_K superblock (256 weights). Port of ggml `dequantize_row_q4_K` for a single `block_q4_K`.
 pub fn dequantize_q4k_block(
     block: &[u8],

@@ -1,6 +1,6 @@
 //! Greedy continuation after a text prompt: encode → prefill → decode loop → decode tokens to string.
 //!
-//! Requires the reference GGUF (~4GB) and `tokenizer.model` at the workspace root.
+//! Requires the reference GGUF (~4GB) and tokenizer under `model/mistral-7b-v0.1/` (see `model/README.md`).
 //!
 //! ```text
 //! cargo test --test generate_smoke greedy_generate_continuation_after_prompt --release -- --ignored --nocapture
@@ -10,13 +10,13 @@
 
 mod common;
 
-use inference_engine_rust::layers::attention::KVCache;
-use inference_engine_rust::layers::embeddings::lookup_embeddings_loaded;
+use inference_engine_rust::layers::attention::kv_caches_for_config;
 use inference_engine_rust::model_config::{ModelConfig, TokenizerPromptConfig};
 use inference_engine_rust::model_loader::file_loader::read_file;
 use inference_engine_rust::model_weights::{ModelWeightNames, ModelWeights};
 use inference_engine_rust::prefill::{
-    decode_forward, final_logits_last_token, prefill_forward, prefill_from_tokens, PrefillState,
+    decode_forward, final_logits_last_token, prefill_forward, prefill_from_tokens,
+    prefill_state_for_single_token_loaded,
 };
 use inference_engine_rust::sampling::sample_greedy;
 use inference_engine_rust::tokenizer::Tokenizer;
@@ -53,7 +53,7 @@ fn logits_top2(logits: &[f32]) -> Option<(usize, f32, usize, f32)> {
 }
 
 #[test]
-#[ignore = "requires model/mistral-7b-v0.1.Q4_K_M.gguf + tokenizer.model; slow on CPU"]
+#[ignore = "requires model/mistral-7b-v0.1/{gguf,tokenizer.model}; slow on CPU"]
 fn greedy_generate_continuation_after_prompt() {
     let model_path = reference_model_path();
     assert!(
@@ -65,7 +65,7 @@ fn greedy_generate_continuation_after_prompt() {
     let tokenizer_path = tokenizer_model_path();
     assert!(
         tokenizer_path.is_file(),
-        "missing tokenizer at {} (expected Mistral-style tokenizer.model at repo root)",
+        "missing tokenizer at {} (see model/README.md / tests/common/mod.rs)",
         tokenizer_path.display()
     );
 
@@ -91,15 +91,7 @@ fn greedy_generate_continuation_after_prompt() {
         prefill_from_tokens(&mut gguf, path_str, &config, &prompt_ids).expect("prefill embed");
     let weights = ModelWeights::from_loaded(&gguf, &names).expect("model weights");
 
-    let mut kv_caches: Vec<KVCache> = (0..config.n_layers)
-        .map(|_| {
-            KVCache::new(
-                config.context_length,
-                config.n_kv_heads,
-                config.head_dim,
-            )
-        })
-        .collect();
+    let mut kv_caches = kv_caches_for_config(&config);
 
     let mut state =
         prefill_forward(&prefill_in, &config, &weights, &mut kv_caches).expect("prefill forward");
@@ -130,8 +122,7 @@ fn greedy_generate_continuation_after_prompt() {
         let next_id = sample_greedy(&logits).expect("greedy sample");
         generated.push(next_id);
 
-        let rows = lookup_embeddings_loaded(&gguf, &[next_id]).expect("embedding row");
-        let step_in = PrefillState::from_embeddings(rows, config.hidden_dim).expect("decode input");
+        let step_in = prefill_state_for_single_token_loaded(&gguf, &config, next_id).expect("decode input");
         state = decode_forward(&step_in, &config, &weights, &mut kv_caches).expect("decode forward");
 
         let h = state.hidden();

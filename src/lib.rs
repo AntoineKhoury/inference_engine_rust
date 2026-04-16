@@ -12,3 +12,4 @@ pub mod prefill;
 pub mod model_weights;
 pub mod sampling;
 pub mod bench_metrics;
+pub mod chat_prompt;

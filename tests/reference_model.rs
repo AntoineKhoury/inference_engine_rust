@@ -28,7 +28,7 @@ const EPS: f32 = 2e-5;
 
 /// Inspect GGUF tokenizer flags (run with `--ignored --nocapture` when the reference GGUF is present).
 #[test]
-#[ignore = "requires model/mistral-7b-v0.1.Q4_K_M.gguf"]
+#[ignore = "requires model/mistral-7b-v0.1/mistral-7b-v0.1.Q4_K_M.gguf"]
 fn mistral_tokenizer_prompt_config_from_gguf() {
     let path = reference_model_path();
     if !path.is_file() {
@@ -49,7 +49,7 @@ fn mistral_tokenizer_prompt_config_from_gguf() {
 
 /// Compare Rust `lookup_embeddings` to hardcoded gguf-py reference for [`REFERENCE_TOKEN_ID`].
 #[test]
-#[ignore = "requires model/mistral-7b-v0.1.Q4_K_M.gguf (see tests/common/mod.rs)"]
+#[ignore = "requires model/mistral-7b-v0.1/mistral-7b-v0.1.Q4_K_M.gguf (see tests/common/mod.rs)"]
 fn embedding_token2_matches_gguf_reference() {
     let path = reference_model_path();
     assert!(

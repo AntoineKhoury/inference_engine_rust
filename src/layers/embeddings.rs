@@ -2,7 +2,8 @@ use crate::EngineError;
 use crate::model_loader::gguf_types::GGUFData;
 use crate::core::tensor::{Tensor, TensorType};
 use crate::ops::quant::quant_k_handler::{
-    dequantize_q4k_block, dequantize_q6k_block, Q4K_BLOCK_SIZE, Q6K_BLOCK_SIZE,
+    dequantize_q4k_block, dequantize_q6k_block, dequantize_q8_0_block, Q4K_BLOCK_SIZE,
+    Q6K_BLOCK_SIZE, Q8_0_BLOCK_ELEMENTS, Q8_0_BLOCK_SIZE,
 };
 const BLOCK_ELEMENTS: usize = 256;
 
@@ -189,9 +190,45 @@ fn lookup_embedding_rows(
                 embeddings.push(embedding);
             }
         }
+        TensorType::Q8_0 => {
+            for &token_id in token_ids {
+                let mut embedding = vec![0.0f32; hidden_dim];
+                let mut cached_block = usize::MAX;
+                let mut decoded = [0.0f32; Q8_0_BLOCK_ELEMENTS];
+                for (h, slot) in embedding.iter_mut().enumerate() {
+                    let idx = embedding_buffer_index(hidden_dim, token_id, h);
+                    let block_idx = idx / Q8_0_BLOCK_ELEMENTS;
+                    let el = idx % Q8_0_BLOCK_ELEMENTS;
+                    if block_idx != cached_block {
+                        let start = block_idx * Q8_0_BLOCK_SIZE;
+                        let block = buf
+                            .get(start..start + Q8_0_BLOCK_SIZE)
+                            .ok_or_else(|| {
+                                EngineError::Tensor("Q8_0 embedding block out of bounds".into())
+                            })?;
+                        dequantize_q8_0_block(block, &mut decoded)?;
+                        cached_block = block_idx;
+                    }
+                    *slot = decoded[el];
+                }
+                embeddings.push(embedding);
+            }
+        }
     }
     
-    Ok(embeddings)
+       Ok(embeddings)
+}
+
+/// Read a single logical row `token_id` from a 2D embedding table (same layout rules as
+/// [`lookup_embedding_rows`]).
+pub fn read_token_row_f32(
+    embedding_tensor: &Tensor,
+    token_id: u32,
+) -> Result<Vec<f32>, EngineError> {
+    let rows = lookup_embedding_rows(embedding_tensor, &[token_id])?;
+    rows.into_iter()
+        .next()
+        .ok_or_else(|| EngineError::Tensor("read_token_row_f32: empty row".into()))
 }
 
 /// Get the embedding dimension (hidden_dim) from the model
@@ -252,10 +289,10 @@ mod tests {
     use crate::model_loader::file_loader::read_file;
     
     #[test]
-    #[ignore = "requires model/mistral-7b-v0.1.Q4_K_M.gguf at repo root (cargo test -- --ignored)"]
+    #[ignore = "requires model/mistral-7b-v0.1/mistral-7b-v0.1.Q4_K_M.gguf (cargo test -- --ignored)"]
     fn test_embedding_lookup() {
         // Load the model
-        let path = "model/mistral-7b-v0.1.Q4_K_M.gguf";
+        let path = "model/mistral-7b-v0.1/mistral-7b-v0.1.Q4_K_M.gguf";
         let mut gguf_data = read_file(path).expect("Failed to read GGUF file");
         // Don't load all tensors - just load the embedding tensor on demand
         // gguf_data.load_tensors(path).expect("Failed to load tensors");
@@ -283,9 +320,9 @@ mod tests {
     }
     
     #[test]
-    #[ignore = "requires model/mistral-7b-v0.1.Q4_K_M.gguf at repo root (cargo test -- --ignored)"]
+    #[ignore = "requires model/mistral-7b-v0.1/mistral-7b-v0.1.Q4_K_M.gguf (cargo test -- --ignored)"]
     fn test_get_embedding_dim() {
-        let path = "model/mistral-7b-v0.1.Q4_K_M.gguf";
+        let path = "model/mistral-7b-v0.1/mistral-7b-v0.1.Q4_K_M.gguf";
         let mut gguf_data = read_file(path).expect("Failed to read GGUF file");
         // Load just the embedding tensor
         gguf_data.load_single_tensor(path, "token_embd.weight")
@@ -299,9 +336,9 @@ mod tests {
     }
     
     #[test]
-    #[ignore = "requires model/mistral-7b-v0.1.Q4_K_M.gguf at repo root (cargo test -- --ignored)"]
+    #[ignore = "requires model/mistral-7b-v0.1/mistral-7b-v0.1.Q4_K_M.gguf (cargo test -- --ignored)"]
     fn test_get_vocab_size() {
-        let path = "model/mistral-7b-v0.1.Q4_K_M.gguf";
+        let path = "model/mistral-7b-v0.1/mistral-7b-v0.1.Q4_K_M.gguf";
         let mut gguf_data = read_file(path).expect("Failed to read GGUF file");
         // Load just the embedding tensor
         gguf_data.load_single_tensor(path, "token_embd.weight")
@@ -315,9 +352,9 @@ mod tests {
     }
     
     #[test]
-    #[ignore = "requires model/mistral-7b-v0.1.Q4_K_M.gguf at repo root (cargo test -- --ignored)"]
+    #[ignore = "requires model/mistral-7b-v0.1/mistral-7b-v0.1.Q4_K_M.gguf (cargo test -- --ignored)"]
     fn test_out_of_vocab_error() {
-        let path = "model/mistral-7b-v0.1.Q4_K_M.gguf";
+        let path = "model/mistral-7b-v0.1/mistral-7b-v0.1.Q4_K_M.gguf";
         let mut gguf_data = read_file(path).expect("Failed to read GGUF file");
         // Load just the embedding tensor
         gguf_data.load_single_tensor(path, "token_embd.weight")

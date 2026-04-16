@@ -1,7 +1,4 @@
-/// Tokenizer module for converting text to token IDs and vice versa
-/// 
-/// This module provides a unified interface for tokenization operations,
-/// currently supporting SentencePiece tokenizers used by models like Mistral.
+//! Tokenizer: **SentencePiece** (`.model`) or Hugging Face **`tokenizer.json`** (e.g. Gemma 4).
 pub mod sentencepiece;
 
 pub use sentencepiece::Tokenizer;

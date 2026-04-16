@@ -15,14 +15,14 @@ use std::time::Instant;
 use serde::Serialize;
 
 use crate::EngineError;
-use crate::layers::attention::KVCache;
-use crate::layers::embeddings::lookup_embeddings_loaded;
+use crate::layers::attention::kv_caches_for_config;
 use crate::model_config::{ModelConfig, TokenizerPromptConfig};
 use crate::model_loader::file_loader::read_file;
 use crate::model_loader::gguf_types::GGUFData;
 use crate::model_weights::{ModelWeightNames, ModelWeights};
 use crate::prefill::{
-    decode_forward, final_logits_last_token, prefill_forward, prefill_from_tokens, PrefillState,
+    decode_forward, final_logits_last_token, prefill_forward, prefill_from_tokens,
+    prefill_state_for_single_token_loaded,
 };
 use crate::sampling::sample_greedy;
 use crate::tokenizer::Tokenizer;
@@ -154,15 +154,7 @@ impl EngineBench {
         let weights = ModelWeights::from_loaded(&self.gguf, &self.names)?;
 
         let t_pf0 = Instant::now();
-        let mut kv_caches: Vec<KVCache> = (0..self.config.n_layers)
-            .map(|_| {
-                KVCache::new(
-                    self.config.context_length,
-                    self.config.n_kv_heads,
-                    self.config.head_dim,
-                )
-            })
-            .collect();
+        let mut kv_caches = kv_caches_for_config(&self.config);
         let state = prefill_forward(&prefill_in, &self.config, &weights, &mut kv_caches)?;
         let prompt_eval_ms = ms(t_pf0.elapsed());
 
@@ -210,15 +202,7 @@ impl EngineBench {
             &prompt_ids,
         )?;
         let weights = ModelWeights::from_loaded(&self.gguf, &self.names)?;
-        let mut kv_caches: Vec<KVCache> = (0..self.config.n_layers)
-            .map(|_| {
-                KVCache::new(
-                    self.config.context_length,
-                    self.config.n_kv_heads,
-                    self.config.head_dim,
-                )
-            })
-            .collect();
+        let mut kv_caches = kv_caches_for_config(&self.config);
         let mut state = prefill_forward(&prefill_in, &self.config, &weights, &mut kv_caches)?;
         let warm_prefill_ms = ms(t_setup0.elapsed());
 
@@ -226,8 +210,7 @@ impl EngineBench {
         for _ in 0..decode_tokens {
             let logits = final_logits_last_token(&state, &self.config, &weights)?;
             let next_id = sample_greedy(&logits)?;
-            let rows = lookup_embeddings_loaded(&self.gguf, &[next_id])?;
-            let step_in = PrefillState::from_embeddings(rows, self.config.hidden_dim)?;
+            let step_in = prefill_state_for_single_token_loaded(&self.gguf, &self.config, next_id)?;
             state = decode_forward(&step_in, &self.config, &weights, &mut kv_caches)?;
         }
         let decode_elapsed_ms = ms(t_dec0.elapsed());
@@ -304,9 +287,7 @@ pub fn run_cold_start(
     let weights_build_ms = ms(t0.elapsed());
 
     let t0 = Instant::now();
-    let mut kv_caches: Vec<KVCache> = (0..config.n_layers)
-        .map(|_| KVCache::new(config.context_length, config.n_kv_heads, config.head_dim))
-        .collect();
+    let mut kv_caches = kv_caches_for_config(&config);
     let kv_alloc_ms = ms(t0.elapsed());
 
     let t0 = Instant::now();

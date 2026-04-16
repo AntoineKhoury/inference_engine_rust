@@ -4,6 +4,7 @@ pub mod matmul;
 // Activation functions (element-wise transforms)
 pub mod swiglu;
 pub mod softmax;
+pub mod gelu;
 
 // Normalization operations
 pub mod rmsnorm;

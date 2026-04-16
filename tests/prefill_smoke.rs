@@ -2,14 +2,15 @@
 
 mod common;
 
-use inference_engine_rust::layers::attention::KVCache;
+use inference_engine_rust::layers::attention::kv_caches_for_config;
 use inference_engine_rust::model_config::ModelConfig;
 use inference_engine_rust::model_loader::file_loader::read_file;
 use inference_engine_rust::model_weights::{ModelWeightNames, ModelWeights};
 
 use inference_engine_rust::layers::embeddings::lookup_embeddings;
 use inference_engine_rust::prefill::{
-    decode_forward, final_logits_last_token, prefill_forward, prefill_from_tokens, PrefillState,
+    decode_forward, final_logits_last_token, prefill_forward, prefill_from_tokens,
+    prefill_state_for_single_token_loaded,
 };
 
 const MODEL_PATH: &str = common::REFERENCE_MODEL_REL_PATH;
@@ -96,15 +97,7 @@ fn prefill_one_token_end_to_end() {
     let input = prefill_from_tokens(&mut gguf, MODEL_PATH, &config, &token_ids).expect("embed");
     let weights = ModelWeights::from_loaded(&gguf, &names).expect("model weights");
 
-    let mut kv_caches: Vec<KVCache> = (0..config.n_layers)
-        .map(|_| {
-            KVCache::new(
-                config.context_length,
-                config.n_kv_heads,
-                config.head_dim,
-            )
-        })
-        .collect();
+    let mut kv_caches = kv_caches_for_config(&config);
 
     let out = prefill_forward(&input, &config, &weights, &mut kv_caches).expect("prefill forward");
     let logits = final_logits_last_token(&out, &config, &weights).expect("logits");
@@ -127,15 +120,7 @@ fn prefill_two_tokens_matches_prefill_one_then_decode() {
     let t1: u32 = 2;
 
     let logits_a = {
-        let mut kv_a: Vec<KVCache> = (0..config.n_layers)
-            .map(|_| {
-                KVCache::new(
-                    config.context_length,
-                    config.n_kv_heads,
-                    config.head_dim,
-                )
-            })
-            .collect();
+        let mut kv_a = kv_caches_for_config(&config);
         let input_a =
             prefill_from_tokens(&mut gguf, MODEL_PATH, &config, &[t0, t1]).expect("embed2");
         let weights = ModelWeights::from_loaded(&gguf, &names).expect("model weights");
@@ -144,19 +129,9 @@ fn prefill_two_tokens_matches_prefill_one_then_decode() {
     };
 
     let logits_b = {
-        let mut kv_b: Vec<KVCache> = (0..config.n_layers)
-            .map(|_| {
-                KVCache::new(
-                    config.context_length,
-                    config.n_kv_heads,
-                    config.head_dim,
-                )
-            })
-            .collect();
+        let mut kv_b = kv_caches_for_config(&config);
         let input_b = prefill_from_tokens(&mut gguf, MODEL_PATH, &config, &[t0]).expect("embed1");
-        let emb_t1 = lookup_embeddings(&mut gguf, MODEL_PATH, &[t1]).expect("embed t1");
-        let decode_in =
-            PrefillState::from_embeddings(emb_t1, config.hidden_dim).expect("decode state");
+        let decode_in = prefill_state_for_single_token_loaded(&gguf, &config, t1).expect("decode state");
         let weights = ModelWeights::from_loaded(&gguf, &names).expect("model weights");
         let _out_b = prefill_forward(&input_b, &config, &weights, &mut kv_b).expect("prefill1");
         let out_dec = decode_forward(&decode_in, &config, &weights, &mut kv_b).expect("decode");

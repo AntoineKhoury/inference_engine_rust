@@ -3,9 +3,10 @@ use std::sync::Arc;
 
 use crate::EngineError;
 use crate::core::tensor::{Tensor, TensorType};
-use crate::model_config::ModelConfig;
+use crate::model_config::{LayerAttentionSpec, LayerDims, ModelConfig, ModelFamily};
 use crate::model_weights::LayerWeights;
 use crate::ops::matmul::matmul;
+use crate::ops::rmsnorm::{rmsnorm, rmsnorm_inplace_no_scale};
 use crate::ops::rope::rope;
 use crate::ops::softmax::softmax;
 use crate::prefill::PrefillState;
@@ -128,11 +129,27 @@ pub enum KVCacheError {
     },
 }
 
+/// One [`KVCache`] per layer, sized from [`ModelConfig::layer_dims`] (per-layer head width).
+pub fn kv_caches_for_config(config: &ModelConfig) -> Vec<KVCache> {
+    config
+        .layer_dims
+        .iter()
+        .map(|d| KVCache::new(config.context_length, config.n_kv_heads, d.head_dim))
+        .collect()
+}
+
 /// Undo HF→GGUF `LlamaModel.permute` on **one row** of Q or K activations (Llama-style GGUF only;
 /// Mistral exports usually set `ModelConfig.unpack_llama_gguf_qk = false`).
 ///
 /// `row` has length `n_groups * head_dim` (Q: `n_heads`; K: `n_kv_heads`). GGUF stores each head as
 /// `reshape(n_g, 2, d/2).swapaxes(1,2).flatten` indices `h*2+b`; logical layout is `b*(d/2)+h`.
+fn rope_freq_slice<'a>(weights: &'a LayerWeights<'a>) -> Option<&'a [f32]> {
+    weights
+        .rope_freqs
+        .and_then(|t| t.as_f32_slice().ok())
+        .filter(|s| !s.is_empty())
+}
+
 pub fn unpack_llama_gguf_qk_row(row: &mut [f32], n_groups: usize, head_dim: usize) {
     assert!(
         head_dim % 2 == 0,
@@ -158,11 +175,15 @@ pub fn unpack_llama_gguf_qk_row(row: &mut [f32], n_groups: usize, head_dim: usiz
     }
 }
 
+#[allow(clippy::needless_range_loop)]
 pub fn prefill_attention_layer(
     input: &PrefillState,
     config: &ModelConfig,
+    layer_dims: &LayerDims,
+    layer_attn: &LayerAttentionSpec,
     weights: &LayerWeights,
-    kv_cache: &mut KVCache,
+    kv_caches: &mut [KVCache],
+    layer_idx: usize,
 ) -> Result<Vec<f32>, EngineError> {
     let seq_len = input.seq_len();
     let hidden_dim = input.hidden_dim();
@@ -172,54 +193,128 @@ pub fn prefill_attention_layer(
             config.hidden_dim
         )));
     }
-    if hidden_dim != config.n_heads * config.head_dim {
+
+    let q_dim = layer_dims.q_dim;
+    let kv_dim = layer_dims.kv_dim;
+    let head_dim = layer_dims.head_dim;
+
+    if q_dim != config.n_heads * head_dim {
+        return Err(EngineError::Model(format!(
+            "prefill attention: q_dim {q_dim} != n_heads * head_dim ({})",
+            config.n_heads * head_dim
+        )));
+    }
+    if kv_dim != config.n_kv_heads * head_dim {
+        return Err(EngineError::Model(format!(
+            "prefill attention: kv_dim {kv_dim} != n_kv_heads * head_dim ({})",
+            config.n_kv_heads * head_dim
+        )));
+    }
+
+    let own = kv_caches
+        .get(layer_idx)
+        .ok_or_else(|| EngineError::Model("prefill attention: kv_caches index".into()))?;
+    if own.n_kv_heads() != config.n_kv_heads || own.head_dim() != head_dim {
         return Err(EngineError::Model(
-            "prefill attention: hidden_dim != n_heads * head_dim".into(),
+            "prefill attention: KVCache n_kv_heads/head_dim does not match layer_dims".into(),
         ));
     }
 
-    let kv_dim = config.n_kv_heads * config.head_dim;
-    if kv_cache.n_kv_heads() != config.n_kv_heads || kv_cache.head_dim() != config.head_dim {
-        return Err(EngineError::Model(
-            "prefill attention: KVCache n_kv_heads/head_dim does not match config".into(),
-        ));
+    let borrow_src = config
+        .gemma4_kv_borrow_from
+        .get(layer_idx)
+        .copied()
+        .flatten();
+    if let Some(src) = borrow_src {
+        let ksrc = kv_caches.get(src).ok_or_else(|| {
+            EngineError::Model(format!("prefill attention: KV borrow source {src} out of range"))
+        })?;
+        if ksrc.n_kv_heads() != config.n_kv_heads || ksrc.head_dim() != head_dim {
+            return Err(EngineError::Model(
+                "prefill attention: borrow source KV shape mismatch".into(),
+            ));
+        }
+        if ksrc.current_pos() != seq_len {
+            return Err(EngineError::Model(format!(
+                "prefill attention: borrow layer {layer_idx} expected source cache len {seq_len}, got {}",
+                ksrc.current_pos()
+            )));
+        }
     }
 
     let group_size = config.n_heads / config.n_kv_heads;
 
     let input_tensor = tensor_from_f32_slice(input.hidden(), vec![seq_len, hidden_dim]);
-    let mut q_tensor = empty_f32_tensor(vec![seq_len, hidden_dim]);
+    let mut q_tensor = empty_f32_tensor(vec![seq_len, q_dim]);
     let mut k_tensor = empty_f32_tensor(vec![seq_len, kv_dim]);
     let mut v_tensor = empty_f32_tensor(vec![seq_len, kv_dim]);
 
     matmul(&input_tensor, weights.wq, &mut q_tensor)?;
-    matmul(&input_tensor, weights.wk, &mut k_tensor)?;
-    matmul(&input_tensor, weights.wv, &mut v_tensor)?;
+    if borrow_src.is_none() {
+        matmul(&input_tensor, weights.wk, &mut k_tensor)?;
+        matmul(&input_tensor, weights.wv, &mut v_tensor)?;
+    }
 
     let q_data = q_tensor.as_f32_slice_mut()?;
     let k_data = k_tensor.as_f32_slice_mut()?;
     let v_data = v_tensor.as_f32_slice_mut()?;
 
-    let head_dim = config.head_dim;
     if config.unpack_llama_gguf_qk {
         for pos in 0..seq_len {
             unpack_llama_gguf_qk_row(
-                &mut q_data[pos * hidden_dim..(pos + 1) * hidden_dim],
+                &mut q_data[pos * q_dim..(pos + 1) * q_dim],
                 config.n_heads,
                 head_dim,
             );
-            unpack_llama_gguf_qk_row(
-                &mut k_data[pos * kv_dim..(pos + 1) * kv_dim],
-                config.n_kv_heads,
-                head_dim,
-            );
+            if borrow_src.is_none() {
+                unpack_llama_gguf_qk_row(
+                    &mut k_data[pos * kv_dim..(pos + 1) * kv_dim],
+                    config.n_kv_heads,
+                    head_dim,
+                );
+            }
         }
     }
 
-    let rope_base = config.rope_theta;
+    let mut head_scratch = vec![0.0f32; head_dim];
+    for pos in 0..seq_len {
+        apply_optional_head_rmsnorm(
+            &mut q_data[pos * q_dim..(pos + 1) * q_dim],
+            config.n_heads,
+            head_dim,
+            weights.attn_q_norm,
+            config.rms_norm_eps,
+            &mut head_scratch,
+        )?;
+        if borrow_src.is_none() {
+            apply_optional_head_rmsnorm(
+                &mut k_data[pos * kv_dim..(pos + 1) * kv_dim],
+                config.n_kv_heads,
+                head_dim,
+                weights.attn_k_norm,
+                config.rms_norm_eps,
+                &mut head_scratch,
+            )?;
+        }
+    }
+
+    // HF `Gemma4TextAttention`: `v_norm` is Gemma4RMSNorm(..., with_scale=false) on each value head.
+    if borrow_src.is_none() && matches!(config.family, ModelFamily::Gemma4) {
+        for pos in 0..seq_len {
+            let row = &mut v_data[pos * kv_dim..(pos + 1) * kv_dim];
+            for h in 0..config.n_kv_heads {
+                let s = h * head_dim;
+                rmsnorm_inplace_no_scale(&mut row[s..s + head_dim], config.rms_norm_eps);
+            }
+        }
+    }
+
+    let rope_base = layer_attn.rope_theta;
+    let rope_rotary = layer_attn.rope_rotary_dim as u32;
+    let rope_ff = rope_freq_slice(weights);
 
     for pos in 0..seq_len {
-        let q_row = pos * hidden_dim;
+        let q_row = pos * q_dim;
         for head in 0..config.n_heads {
             let head_start = q_row + head * head_dim;
             let head_end = head_start + head_dim;
@@ -228,80 +323,149 @@ pub fn prefill_attention_layer(
                 rope_base,
                 pos as u32,
                 head_dim as u32,
-                head_dim as u32,
+                rope_rotary,
+                rope_ff,
             )?;
         }
-        let k_row = pos * kv_dim;
-        for kv_h in 0..config.n_kv_heads {
-            let head_start = k_row + kv_h * head_dim;
-            let head_end = head_start + head_dim;
-            rope(
-                &mut k_data[head_start..head_end],
-                rope_base,
-                pos as u32,
-                head_dim as u32,
-                head_dim as u32,
-            )?;
+        if borrow_src.is_none() {
+            let k_row = pos * kv_dim;
+            for kv_h in 0..config.n_kv_heads {
+                let head_start = k_row + kv_h * head_dim;
+                let head_end = head_start + head_dim;
+                rope(
+                    &mut k_data[head_start..head_end],
+                    rope_base,
+                    pos as u32,
+                    head_dim as u32,
+                    rope_rotary,
+                    rope_ff,
+                )?;
+            }
         }
     }
 
-    for pos in 0..seq_len {
-        let row_start = pos * kv_dim;
-        let row_end = row_start + kv_dim;
-        kv_cache.append_kv(&k_data[row_start..row_end], &v_data[row_start..row_end])?;
+    if borrow_src.is_none() {
+        for pos in 0..seq_len {
+            let row_start = pos * kv_dim;
+            let row_end = row_start + kv_dim;
+            kv_caches[layer_idx].append_kv(&k_data[row_start..row_end], &v_data[row_start..row_end])?;
+        }
     }
 
-    let mut attn_out = vec![0.0f32; seq_len * hidden_dim];
-    let scale = 1.0f32 / (head_dim as f32).sqrt();
+    let mut attn_out = vec![0.0f32; seq_len * q_dim];
+    // Gemma4: HF `Gemma4TextAttention.scaling = 1.0`; llama.cpp `f_attention_scale = 1.0` for LLM_ARCH_GEMMA4.
+    // Scale is folded into RoPE cos/sin there, not applied as 1/sqrt(head_dim) on Q·K.
+    let scale = match config.family {
+        ModelFamily::Gemma4 => 1.0f32,
+        ModelFamily::MistralLlama => 1.0f32 / (head_dim as f32).sqrt(),
+    };
+
+    let src_idx = borrow_src.unwrap_or(layer_idx);
 
     for pos in 0..seq_len {
+        let j_min = layer_attn
+            .sliding_window
+            .map(|w| pos.saturating_sub(w.saturating_sub(1)))
+            .unwrap_or(0);
         for head in 0..config.n_heads {
             let kv_head = head / group_size;
-            let q_start = pos * hidden_dim + head * head_dim;
+            let q_start = pos * q_dim + head * head_dim;
             let q = &q_data[q_start..q_start + head_dim];
 
-            let mut scores = vec![0.0f32; pos + 1];
-            for (j, score_slot) in scores.iter_mut().enumerate().take(pos + 1) {
-                let k_start = j * kv_dim + kv_head * head_dim;
-                let k = &k_data[k_start..k_start + head_dim];
+            let mut scores = vec![f32::NEG_INFINITY; pos + 1];
+            for j in j_min..=pos {
                 let mut dot = 0.0f32;
-                for d in 0..head_dim {
-                    dot += q[d] * k[d];
+                if borrow_src.is_some() {
+                    let k_vec = kv_caches[src_idx].get_k_slice(j, kv_head)?;
+                    for d in 0..head_dim {
+                        dot += q[d] * k_vec[d];
+                    }
+                } else {
+                    let k_start = j * kv_dim + kv_head * head_dim;
+                    let k = &k_data[k_start..k_start + head_dim];
+                    for d in 0..head_dim {
+                        dot += q[d] * k[d];
+                    }
                 }
-                *score_slot = dot * scale;
+                scores[j] = dot * scale;
             }
 
             let mut weights_buf = vec![0.0f32; pos + 1];
             softmax(&scores, &mut weights_buf)?;
 
-            let out_start = pos * hidden_dim + head * head_dim;
+            let out_start = pos * q_dim + head * head_dim;
             let out = &mut attn_out[out_start..out_start + head_dim];
-            for (j, &w) in weights_buf.iter().enumerate().take(pos + 1) {
-                let v_start = j * kv_dim + kv_head * head_dim;
-                let v = &v_data[v_start..v_start + head_dim];
-                for d in 0..head_dim {
-                    out[d] += w * v[d];
+            for j in j_min..=pos {
+                let w = weights_buf[j];
+                if borrow_src.is_some() {
+                    let v_vec = kv_caches[src_idx].get_v_slice(j, kv_head)?;
+                    for d in 0..head_dim {
+                        out[d] += w * v_vec[d];
+                    }
+                } else {
+                    let v_start = j * kv_dim + kv_head * head_dim;
+                    let v = &v_data[v_start..v_start + head_dim];
+                    for d in 0..head_dim {
+                        out[d] += w * v[d];
+                    }
                 }
             }
         }
     }
 
-    let attn_tensor = tensor_from_f32_slice(&attn_out, vec![seq_len, hidden_dim]);
+    let attn_tensor = tensor_from_f32_slice(&attn_out, vec![seq_len, q_dim]);
     let mut projected = empty_f32_tensor(vec![seq_len, hidden_dim]);
     matmul(&attn_tensor, weights.wo, &mut projected)?;
 
     Ok(projected.as_f32_slice()?.to_vec())
 }
 
+fn apply_optional_head_rmsnorm(
+    row: &mut [f32],
+    n_groups: usize,
+    head_dim: usize,
+    norm: Option<&Tensor>,
+    eps: f32,
+    scratch: &mut [f32],
+) -> Result<(), EngineError> {
+    let Some(t) = norm else {
+        return Ok(());
+    };
+    let w = t.as_f32_slice()?;
+    if w.len() != head_dim {
+        return Err(EngineError::Model(format!(
+            "attn q/k norm weight len {} != head_dim {}",
+            w.len(),
+            head_dim
+        )));
+    }
+    if scratch.len() < head_dim {
+        return Err(EngineError::Model(
+            "internal: head norm scratch shorter than head_dim".into(),
+        ));
+    }
+    let tmp = &mut scratch[..head_dim];
+    for g in 0..n_groups {
+        let s = g * head_dim;
+        rmsnorm(&row[s..s + head_dim], w, eps, tmp)?;
+        row[s..s + head_dim].copy_from_slice(tmp);
+    }
+    Ok(())
+}
+
 /// Single-token attention for autoregressive decode. `input` must have `seq_len == 1`.
 ///
 /// RoPE uses position `kv_cache.current_pos` (0-based index of this token in the full sequence).
 /// Past keys/values are read from `kv_cache`; the new K/V are appended after RoPE.
+#[allow(clippy::needless_range_loop)]
 pub fn decode_attention_layer(
     input: &PrefillState,
     config: &ModelConfig,
+    layer_dims: &LayerDims,
+    layer_attn: &LayerAttentionSpec,
     weights: &LayerWeights,
-    kv_cache: &mut KVCache,
+    kv_caches: &mut [KVCache],
+    layer_idx: usize,
 ) -> Result<Vec<f32>, EngineError> {
     let seq_len = input.seq_len();
     if seq_len != 1 {
@@ -316,42 +480,98 @@ pub fn decode_attention_layer(
             config.hidden_dim
         )));
     }
-    if hidden_dim != config.n_heads * config.head_dim {
+
+    let q_dim = layer_dims.q_dim;
+    let kv_dim = layer_dims.kv_dim;
+    let head_dim = layer_dims.head_dim;
+
+    if q_dim != config.n_heads * head_dim || kv_dim != config.n_kv_heads * head_dim {
         return Err(EngineError::Model(
-            "decode attention: hidden_dim != n_heads * head_dim".into(),
+            "decode attention: layer_dims inconsistent with head counts".into(),
         ));
     }
 
-    let kv_dim = config.n_kv_heads * config.head_dim;
-    if kv_cache.n_kv_heads() != config.n_kv_heads || kv_cache.head_dim() != config.head_dim {
+    let own = kv_caches
+        .get(layer_idx)
+        .ok_or_else(|| EngineError::Model("decode attention: kv_caches index".into()))?;
+    if own.n_kv_heads() != config.n_kv_heads || own.head_dim() != head_dim {
         return Err(EngineError::Model(
-            "decode attention: KVCache n_kv_heads/head_dim does not match config".into(),
+            "decode attention: KVCache n_kv_heads/head_dim does not match layer_dims".into(),
         ));
     }
+
+    let borrow_src = config
+        .gemma4_kv_borrow_from
+        .get(layer_idx)
+        .copied()
+        .flatten();
+
+    let rope_pos = if let Some(src) = borrow_src {
+        let n = kv_caches[src].current_pos();
+        if n == 0 {
+            return Err(EngineError::Model(
+                "decode attention: KV borrow source cache empty (rope_pos)".into(),
+            ));
+        }
+        (n - 1) as u32
+    } else {
+        own.current_pos() as u32
+    };
 
     let group_size = config.n_heads / config.n_kv_heads;
-    let rope_pos = kv_cache.current_pos() as u32;
 
     let input_tensor = tensor_from_f32_slice(input.hidden(), vec![1, hidden_dim]);
-    let mut q_tensor = empty_f32_tensor(vec![1, hidden_dim]);
+    let mut q_tensor = empty_f32_tensor(vec![1, q_dim]);
     let mut k_tensor = empty_f32_tensor(vec![1, kv_dim]);
     let mut v_tensor = empty_f32_tensor(vec![1, kv_dim]);
 
     matmul(&input_tensor, weights.wq, &mut q_tensor)?;
-    matmul(&input_tensor, weights.wk, &mut k_tensor)?;
-    matmul(&input_tensor, weights.wv, &mut v_tensor)?;
+    if borrow_src.is_none() {
+        matmul(&input_tensor, weights.wk, &mut k_tensor)?;
+        matmul(&input_tensor, weights.wv, &mut v_tensor)?;
+    }
 
     let q_data = q_tensor.as_f32_slice_mut()?;
     let k_data = k_tensor.as_f32_slice_mut()?;
     let v_data = v_tensor.as_f32_slice_mut()?;
 
-    let head_dim = config.head_dim;
     if config.unpack_llama_gguf_qk {
         unpack_llama_gguf_qk_row(q_data, config.n_heads, head_dim);
-        unpack_llama_gguf_qk_row(k_data, config.n_kv_heads, head_dim);
+        if borrow_src.is_none() {
+            unpack_llama_gguf_qk_row(k_data, config.n_kv_heads, head_dim);
+        }
     }
 
-    let rope_base = config.rope_theta;
+    let mut head_scratch = vec![0.0f32; head_dim];
+    apply_optional_head_rmsnorm(
+        q_data,
+        config.n_heads,
+        head_dim,
+        weights.attn_q_norm,
+        config.rms_norm_eps,
+        &mut head_scratch,
+    )?;
+    if borrow_src.is_none() {
+        apply_optional_head_rmsnorm(
+            k_data,
+            config.n_kv_heads,
+            head_dim,
+            weights.attn_k_norm,
+            config.rms_norm_eps,
+            &mut head_scratch,
+        )?;
+    }
+
+    if borrow_src.is_none() && matches!(config.family, ModelFamily::Gemma4) {
+        for h in 0..config.n_kv_heads {
+            let s = h * head_dim;
+            rmsnorm_inplace_no_scale(&mut v_data[s..s + head_dim], config.rms_norm_eps);
+        }
+    }
+
+    let rope_base = layer_attn.rope_theta;
+    let rope_rotary = layer_attn.rope_rotary_dim as u32;
+    let rope_ff = rope_freq_slice(weights);
 
     for head in 0..config.n_heads {
         let head_start = head * head_dim;
@@ -361,55 +581,70 @@ pub fn decode_attention_layer(
             rope_base,
             rope_pos,
             head_dim as u32,
-            head_dim as u32,
+            rope_rotary,
+            rope_ff,
         )?;
     }
-    for kv_h in 0..config.n_kv_heads {
-        let head_start = kv_h * head_dim;
-        let head_end = head_start + head_dim;
-        rope(
-            &mut k_data[head_start..head_end],
-            rope_base,
-            rope_pos,
-            head_dim as u32,
-            head_dim as u32,
-        )?;
+    if borrow_src.is_none() {
+        for kv_h in 0..config.n_kv_heads {
+            let head_start = kv_h * head_dim;
+            let head_end = head_start + head_dim;
+            rope(
+                &mut k_data[head_start..head_end],
+                rope_base,
+                rope_pos,
+                head_dim as u32,
+                rope_rotary,
+                rope_ff,
+            )?;
+        }
     }
 
-    kv_cache.append_kv(k_data, v_data)?;
+    if borrow_src.is_none() {
+        kv_caches[layer_idx].append_kv(k_data, v_data)?;
+    }
 
-    let total_pos = kv_cache.current_pos();
-    let mut attn_out = vec![0.0f32; hidden_dim];
-    let scale = 1.0f32 / (head_dim as f32).sqrt();
+    let src_idx = borrow_src.unwrap_or(layer_idx);
+    let total_pos = kv_caches[src_idx].current_pos();
+    let j_min = layer_attn
+        .sliding_window
+        .map(|w| total_pos.saturating_sub(w))
+        .unwrap_or(0);
+    let mut attn_out = vec![0.0f32; q_dim];
+    let scale = match config.family {
+        ModelFamily::Gemma4 => 1.0f32,
+        ModelFamily::MistralLlama => 1.0f32 / (head_dim as f32).sqrt(),
+    };
 
     for head in 0..config.n_heads {
         let kv_head = head / group_size;
         let q_start = head * head_dim;
         let q = &q_data[q_start..q_start + head_dim];
 
-        let mut scores = vec![0.0f32; total_pos];
-        for (j, score_slot) in scores.iter_mut().enumerate().take(total_pos) {
-            let k_vec = kv_cache.get_k_slice(j, kv_head)?;
+        let mut scores = vec![f32::NEG_INFINITY; total_pos];
+        for j in j_min..total_pos {
+            let k_vec = kv_caches[src_idx].get_k_slice(j, kv_head)?;
             let mut dot = 0.0f32;
             for d in 0..head_dim {
                 dot += q[d] * k_vec[d];
             }
-            *score_slot = dot * scale;
+            scores[j] = dot * scale;
         }
 
         let mut weights_buf = vec![0.0f32; total_pos];
         softmax(&scores, &mut weights_buf)?;
 
         let out = &mut attn_out[head * head_dim..(head + 1) * head_dim];
-        for (j, &w) in weights_buf.iter().enumerate().take(total_pos) {
-            let v_vec = kv_cache.get_v_slice(j, kv_head)?;
+        for j in j_min..total_pos {
+            let w = weights_buf[j];
+            let v_vec = kv_caches[src_idx].get_v_slice(j, kv_head)?;
             for d in 0..head_dim {
                 out[d] += w * v_vec[d];
             }
         }
     }
 
-    let attn_tensor = tensor_from_f32_slice(&attn_out, vec![1, hidden_dim]);
+    let attn_tensor = tensor_from_f32_slice(&attn_out, vec![1, q_dim]);
     let mut projected = empty_f32_tensor(vec![1, hidden_dim]);
     matmul(&attn_tensor, weights.wo, &mut projected)?;
 

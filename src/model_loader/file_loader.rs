@@ -67,24 +67,24 @@ mod test {
     use super::*;
 
     #[test]
-    #[ignore = "requires ./model/mistral-7b-v0.1.Q4_K_M.gguf (cargo test -- --ignored)"]
+    #[ignore = "requires ./model/mistral-7b-v0.1/mistral-7b-v0.1.Q4_K_M.gguf (cargo test -- --ignored)"]
     fn test_file_read_metadata() { 
         // Test reading metadata only
-        let result = read_file("./model/mistral-7b-v0.1.Q4_K_M.gguf");
+        let result = read_file("./model/mistral-7b-v0.1/mistral-7b-v0.1.Q4_K_M.gguf");
         assert!(result.is_ok(), "Failed to read file: {:?}", result.err());
     }
     
     #[test]
-    #[ignore = "requires ./model/mistral-7b-v0.1.Q4_K_M.gguf (cargo test -- --ignored)"]
+    #[ignore = "requires ./model/mistral-7b-v0.1/mistral-7b-v0.1.Q4_K_M.gguf (cargo test -- --ignored)"]
     fn test_load_tensors(){
         // Test loading actual tensor data
-        let mut gguf_data = read_file("./model/mistral-7b-v0.1.Q4_K_M.gguf").unwrap();
+        let mut gguf_data = read_file("./model/mistral-7b-v0.1/mistral-7b-v0.1.Q4_K_M.gguf").unwrap();
         
         // Initially, no tensors should be loaded
         assert_eq!(gguf_data.num_tensors(), 0);
         
         // Load all tensors
-        let load_result = gguf_data.load_tensors("./model/mistral-7b-v0.1.Q4_K_M.gguf");
+        let load_result = gguf_data.load_tensors("./model/mistral-7b-v0.1/mistral-7b-v0.1.Q4_K_M.gguf");
         assert!(load_result.is_ok(), "Failed to load tensors: {:?}", load_result.err());
         
         // Verify tensors were loaded
@@ -99,10 +99,10 @@ mod test {
     }
     
     #[test]
-    #[ignore = "requires ./model/mistral-7b-v0.1.Q4_K_M.gguf (cargo test -- --ignored)"]
+    #[ignore = "requires ./model/mistral-7b-v0.1/mistral-7b-v0.1.Q4_K_M.gguf (cargo test -- --ignored)"]
     fn test_load_single_tensor() {
         // Test loading just one small tensor to verify the loading logic works
-        let gguf_data = read_file("./model/mistral-7b-v0.1.Q4_K_M.gguf").unwrap();
+        let gguf_data = read_file("./model/mistral-7b-v0.1/mistral-7b-v0.1.Q4_K_M.gguf").unwrap();
         
         // Find a small F32 tensor (norm weights are small - 4096 elements)
         let tensor_info = gguf_data.tensors_metadata().iter()
@@ -114,7 +114,7 @@ mod test {
         use std::fs::File;
         use std::io::BufReader;
         
-        let file = File::open("./model/mistral-7b-v0.1.Q4_K_M.gguf").unwrap();
+        let file = File::open("./model/mistral-7b-v0.1/mistral-7b-v0.1.Q4_K_M.gguf").unwrap();
         let buf_reader = BufReader::with_capacity(1024 * 1024, file);
         let mut reader = crate::model_loader::reader::Reader::new(buf_reader, 0);
         

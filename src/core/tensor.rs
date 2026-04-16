@@ -18,6 +18,8 @@ pub enum TensorType {
     Q4K,
     /// 6-bit quantization, unpacked to u8 (values 0-63)
     Q6K,
+    /// Q8_0: blocks of 32 int8 values with one fp16 scale per block (ggml `block_q8_0`).
+    Q8_0,
 }
 
 impl Tensor {
