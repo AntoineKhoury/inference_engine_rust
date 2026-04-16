@@ -1,10 +1,12 @@
 //! Wall-clock timings for comparing this engine to llama-bench / llama.cpp-style metrics.
 //!
 //! - **Cold start** — from [`crate::model_loader::file_loader::read_file`] through the first
-//!   greedy token after prefill (includes tokenizer load, weight load, prefill, first decode).
-//! - **Interactive TTFT** — weights already resident; fresh KV cache; measures tokenizer encode,
-//!   prefill input gather, prefill forward, and first decode step. Also reports
-//!   `ttft_infer_ms` (encode excluded) to line up with llama-bench, which omits tokenization.
+//!   greedy token id (tokenizer + weight load + prefill + output head + sample).
+//! - **Interactive TTFT** — weights already resident; fresh KV cache. Reports
+//!   **`prompt_eval_ms`** (full transformer over the prompt; same idea as llama **`prompt eval time`**),
+//!   **`lm_head_sample_ms`** (final RMSNorm + LM head + greedy argmax — not a full autoregressive
+//!   decode step), and **`ttft_infer_ms`** = prepare + prompt eval + head (tokenizer excluded), for
+//!   apples-to-apples with llama-bench-style TTFT without tokenization.
 //! - **Decode throughput** — after a warm prefill, times only the greedy decode loop (`n` new tokens).
 
 use std::path::Path;
@@ -38,14 +40,17 @@ pub struct ColdStartMetrics {
     pub prompt_token_count: usize,
     pub gguf_metadata_ms: f64,
     pub tokenizer_load_ms: f64,
-    pub encode_ms: f64,
+    pub tokenizer_encode_ms: f64,
     pub config_and_resolve_ms: f64,
     pub tensor_load_ms: f64,
-    pub prefill_input_ms: f64,
+    /// Embedding gather + build prefill input (not the transformer stack).
+    pub prefill_prepare_ms: f64,
     pub weights_build_ms: f64,
     pub kv_alloc_ms: f64,
-    pub prefill_forward_ms: f64,
-    pub first_token_ms: f64,
+    /// Full forward over prompt positions (llama **`prompt eval time`** analog).
+    pub prompt_eval_ms: f64,
+    /// Output norm + LM head + greedy sample on last prefill hidden state (not a full decode step).
+    pub lm_head_sample_ms: f64,
     /// Wall time from the start of `read_file` until the first greedy token id is sampled.
     pub cold_ttft_ms: f64,
 }
@@ -53,13 +58,13 @@ pub struct ColdStartMetrics {
 #[derive(Debug, Clone, Serialize)]
 pub struct InteractiveTtftMetrics {
     pub prompt_token_count: usize,
-    pub encode_ms: f64,
-    pub prefill_input_ms: f64,
-    pub prefill_forward_ms: f64,
-    pub first_token_ms: f64,
-    /// Prefill input + forward + first decode (llama-bench-style: no tokenization).
+    pub tokenizer_encode_ms: f64,
+    pub prefill_prepare_ms: f64,
+    pub prompt_eval_ms: f64,
+    pub lm_head_sample_ms: f64,
+    /// `prefill_prepare_ms` + `prompt_eval_ms` + `lm_head_sample_ms` (no tokenization).
     pub ttft_infer_ms: f64,
-    /// Includes tokenizer encode.
+    /// Same sum plus `tokenizer_encode_ms`.
     pub ttft_with_tokenizer_ms: f64,
 }
 
@@ -67,8 +72,10 @@ pub struct InteractiveTtftMetrics {
 pub struct DecodeThroughputMetrics {
     pub prompt_token_count: usize,
     pub decode_tokens: usize,
-    pub prefill_setup_ms: f64,
-    pub decode_wall_ms: f64,
+    /// Untimed setup: prepare prefill + weights + KV + `prefill_forward` before the decode loop.
+    pub warm_prefill_ms: f64,
+    /// Wall time for `decode_tokens` full autoregressive steps only.
+    pub decode_elapsed_ms: f64,
     pub decode_tokens_per_sec: f64,
 }
 
@@ -127,13 +134,13 @@ impl EngineBench {
         })
     }
 
-    /// Strict interactive: fresh KV; time encode, prefill, first greedy token.
+    /// Strict interactive: fresh KV; time tokenizer, prefill prep, prompt eval, LM head + sample.
     pub fn run_interactive_ttft(&mut self, prompt: &str) -> Result<InteractiveTtftMetrics, EngineError> {
         let t_enc0 = Instant::now();
         let prompt_ids = self
             .tokenizer
             .encode_with_prompt_config(prompt, &self.tok_prompt)?;
-        let encode_ms = ms(t_enc0.elapsed());
+        let tokenizer_encode_ms = ms(t_enc0.elapsed());
 
         let t_in0 = Instant::now();
         let prefill_in = prefill_from_tokens(
@@ -142,7 +149,7 @@ impl EngineBench {
             &self.config,
             &prompt_ids,
         )?;
-        let prefill_input_ms = ms(t_in0.elapsed());
+        let prefill_prepare_ms = ms(t_in0.elapsed());
 
         let weights = ModelWeights::from_loaded(&self.gguf, &self.names)?;
 
@@ -157,22 +164,22 @@ impl EngineBench {
             })
             .collect();
         let state = prefill_forward(&prefill_in, &self.config, &weights, &mut kv_caches)?;
-        let prefill_forward_ms = ms(t_pf0.elapsed());
+        let prompt_eval_ms = ms(t_pf0.elapsed());
 
         let t_tok0 = Instant::now();
         let logits = final_logits_last_token(&state, &self.config, &weights)?;
         let _first_id = sample_greedy(&logits)?;
-        let first_token_ms = ms(t_tok0.elapsed());
+        let lm_head_sample_ms = ms(t_tok0.elapsed());
 
-        let ttft_infer_ms = prefill_input_ms + prefill_forward_ms + first_token_ms;
-        let ttft_with_tokenizer_ms = encode_ms + ttft_infer_ms;
+        let ttft_infer_ms = prefill_prepare_ms + prompt_eval_ms + lm_head_sample_ms;
+        let ttft_with_tokenizer_ms = tokenizer_encode_ms + ttft_infer_ms;
 
         Ok(InteractiveTtftMetrics {
             prompt_token_count: prompt_ids.len(),
-            encode_ms,
-            prefill_input_ms,
-            prefill_forward_ms,
-            first_token_ms,
+            tokenizer_encode_ms,
+            prefill_prepare_ms,
+            prompt_eval_ms,
+            lm_head_sample_ms,
             ttft_infer_ms,
             ttft_with_tokenizer_ms,
         })
@@ -213,7 +220,7 @@ impl EngineBench {
             })
             .collect();
         let mut state = prefill_forward(&prefill_in, &self.config, &weights, &mut kv_caches)?;
-        let prefill_setup_ms = ms(t_setup0.elapsed());
+        let warm_prefill_ms = ms(t_setup0.elapsed());
 
         let t_dec0 = Instant::now();
         for _ in 0..decode_tokens {
@@ -223,15 +230,16 @@ impl EngineBench {
             let step_in = PrefillState::from_embeddings(rows, self.config.hidden_dim)?;
             state = decode_forward(&step_in, &self.config, &weights, &mut kv_caches)?;
         }
-        let decode_wall_ms = ms(t_dec0.elapsed());
+        let decode_elapsed_ms = ms(t_dec0.elapsed());
 
-        let decode_tokens_per_sec = (decode_tokens as f64) / (decode_wall_ms / 1e3).max(f64::EPSILON);
+        let decode_tokens_per_sec =
+            (decode_tokens as f64) / (decode_elapsed_ms / 1e3).max(f64::EPSILON);
 
         Ok(DecodeThroughputMetrics {
             prompt_token_count: prompt_ids.len(),
             decode_tokens,
-            prefill_setup_ms,
-            decode_wall_ms,
+            warm_prefill_ms,
+            decode_elapsed_ms,
             decode_tokens_per_sec,
         })
     }
@@ -275,7 +283,7 @@ pub fn run_cold_start(
 
     let t0 = Instant::now();
     let prompt_ids = tokenizer.encode_with_prompt_config(prompt, &tok_prompt)?;
-    let encode_ms = ms(t0.elapsed());
+    let tokenizer_encode_ms = ms(t0.elapsed());
     let prompt_token_count = prompt_ids.len();
 
     let t0 = Instant::now();
@@ -289,7 +297,7 @@ pub fn run_cold_start(
 
     let t0 = Instant::now();
     let prefill_in = prefill_from_tokens(&mut gguf, model_path.as_str(), &config, &prompt_ids)?;
-    let prefill_input_ms = ms(t0.elapsed());
+    let prefill_prepare_ms = ms(t0.elapsed());
 
     let t0 = Instant::now();
     let weights = ModelWeights::from_loaded(&gguf, &names)?;
@@ -303,12 +311,12 @@ pub fn run_cold_start(
 
     let t0 = Instant::now();
     let state = prefill_forward(&prefill_in, &config, &weights, &mut kv_caches)?;
-    let prefill_forward_ms = ms(t0.elapsed());
+    let prompt_eval_ms = ms(t0.elapsed());
 
     let t0 = Instant::now();
     let logits = final_logits_last_token(&state, &config, &weights)?;
     let _first_id = sample_greedy(&logits)?;
-    let first_token_ms = ms(t0.elapsed());
+    let lm_head_sample_ms = ms(t0.elapsed());
 
     let cold_ttft_ms = ms(wall0.elapsed());
 
@@ -325,14 +333,14 @@ pub fn run_cold_start(
         prompt_token_count,
         gguf_metadata_ms,
         tokenizer_load_ms,
-        encode_ms,
+        tokenizer_encode_ms,
         config_and_resolve_ms,
         tensor_load_ms,
-        prefill_input_ms,
+        prefill_prepare_ms,
         weights_build_ms,
         kv_alloc_ms,
-        prefill_forward_ms,
-        first_token_ms,
+        prompt_eval_ms,
+        lm_head_sample_ms,
         cold_ttft_ms,
     };
 
@@ -359,7 +367,7 @@ pub fn run_all(
 /// no layer offload (`-ngl 0`), no device offload (`--device none`), no sneaking matmuls to the GPU
 /// (`--no-op-offload`), single thread (`-t 1`), no empty warmup (`--no-warmup`), one generated token (`-n 1`).
 ///
-/// `prompt_eval_ms` matches the README / llama-bench notion of TTFT without tokenization (prompt batch only).
+/// `prompt_eval_ms` here is parsed from llama’s **`prompt eval time`** line (prompt batch only; no tokenization in that figure).
 /// Metal may still appear in logs as a loaded backend; with these flags the perf breakdown should not use GPU memory.
 #[derive(Debug, Clone, Serialize)]
 pub struct LlamaCompletionTtftRef {

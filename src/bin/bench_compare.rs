@@ -10,7 +10,7 @@
 //! ```
 //!
 //! Map results to llama-bench: **pp** = prompt tokens / prefill wall time; **tg** = decode tok/s.
-//! This binary includes tokenization unless noted (`ttft_infer_ms` excludes encode).
+//! **`ttft_infer_ms`** = `prefill_prepare_ms` + `prompt_eval_ms` + `lm_head_sample_ms` (no tokenizer).
 
 use std::path::PathBuf;
 
@@ -66,7 +66,7 @@ enum Commands {
     },
     /// From `read_file` through first greedy token id (includes load + prefill + first logits/sample)
     ColdStart,
-    /// Weights loaded; fresh KV; time encode + prefill + first token (`ttft_infer_ms` excludes encode)
+    /// Weights loaded; fresh KV; tokenizer + prefill prep + prompt eval + LM head + sample (`ttft_infer_ms` omits tokenizer)
     InteractiveTtft,
     /// After warm prefill, time greedy decode only (`n` full steps, same as main CLI loop)
     DecodeThroughput {
@@ -88,7 +88,7 @@ fn finite_pos_ms(x: f64, name: &str) -> Result<(), EngineError> {
 fn check_cold(m: &ColdStartMetrics) -> Result<(), EngineError> {
     finite_pos_ms(m.gguf_metadata_ms, "cold.gguf_metadata_ms")?;
     finite_pos_ms(m.cold_ttft_ms, "cold.cold_ttft_ms")?;
-    finite_pos_ms(m.first_token_ms, "cold.first_token_ms")?;
+    finite_pos_ms(m.lm_head_sample_ms, "cold.lm_head_sample_ms")?;
     if m.prompt_token_count == 0 {
         return Err(EngineError::Model(
             "cold.prompt_token_count is zero".into(),
@@ -112,7 +112,7 @@ fn check_decode(
     m: &DecodeThroughputMetrics,
     min_tps: Option<f64>,
 ) -> Result<(), EngineError> {
-    finite_pos_ms(m.decode_wall_ms, "decode.decode_wall_ms")?;
+    finite_pos_ms(m.decode_elapsed_ms, "decode.decode_elapsed_ms")?;
     if !m.decode_tokens_per_sec.is_finite() {
         return Err(EngineError::Model(
             "decode.decode_tokens_per_sec is not finite".into(),
@@ -137,31 +137,43 @@ fn print_cold_human(m: &ColdStartMetrics) {
     println!("  prompt_token_count: {}", m.prompt_token_count);
     println!("  gguf_metadata_ms:   {:.3}", m.gguf_metadata_ms);
     println!("  tokenizer_load_ms:  {:.3}", m.tokenizer_load_ms);
-    println!("  encode_ms:          {:.3}", m.encode_ms);
+    println!("  tokenizer_encode_ms:{:.3}", m.tokenizer_encode_ms);
     println!("  config_resolve_ms:  {:.3}", m.config_and_resolve_ms);
     println!("  tensor_load_ms:     {:.3}", m.tensor_load_ms);
-    println!("  prefill_input_ms:   {:.3}", m.prefill_input_ms);
+    println!("  prefill_prepare_ms: {:.3}", m.prefill_prepare_ms);
     println!("  weights_build_ms:   {:.3}", m.weights_build_ms);
     println!("  kv_alloc_ms:        {:.3}", m.kv_alloc_ms);
-    println!("  prefill_forward_ms: {:.3}", m.prefill_forward_ms);
-    println!("  first_token_ms:     {:.3}", m.first_token_ms);
+    println!("  prompt_eval_ms:     {:.3}  (llama: prompt eval time)", m.prompt_eval_ms);
+    println!(
+        "  lm_head_sample_ms:  {:.3}  (output norm + LM head + argmax; not full decode)",
+        m.lm_head_sample_ms
+    );
     println!("  cold_ttft_ms:       {:.3}", m.cold_ttft_ms);
 }
 
 fn print_interactive_human(m: &InteractiveTtftMetrics, llama: Option<&LlamaCompletionTtftRef>) {
     println!("=== interactive-ttft (warm weights, fresh KV) ===");
     println!("  prompt_token_count:        {}", m.prompt_token_count);
-    println!("  encode_ms:                 {:.3}", m.encode_ms);
-    println!("  prefill_input_ms:          {:.3}", m.prefill_input_ms);
-    println!("  prefill_forward_ms:        {:.3}", m.prefill_forward_ms);
-    println!("  first_token_ms:            {:.3}", m.first_token_ms);
-    println!("  ttft_infer_ms:             {:.3}  (no tokenization; closer to llama-bench)", m.ttft_infer_ms);
+    println!("  tokenizer_encode_ms:       {:.3}", m.tokenizer_encode_ms);
+    println!("  prefill_prepare_ms:        {:.3}", m.prefill_prepare_ms);
+    println!(
+        "  prompt_eval_ms:            {:.3}  (llama: prompt eval time)",
+        m.prompt_eval_ms
+    );
+    println!(
+        "  lm_head_sample_ms:         {:.3}  (output norm + LM head + argmax; not full decode)",
+        m.lm_head_sample_ms
+    );
+    println!(
+        "  ttft_infer_ms:             {:.3}  (prepare + prompt_eval + lm_head_sample; no tokenizer)",
+        m.ttft_infer_ms
+    );
     println!("  ttft_with_tokenizer_ms:    {:.3}", m.ttft_with_tokenizer_ms);
     if let Some(l) = llama {
         println!();
         println!("=== llama-completion --perf (reference, CPU-fair: -ngl 0, --device none, --no-op-offload, -t 1) ===");
         println!("  load_ms (model): {:.3}", l.load_ms);
-        println!("  prompt_eval_ms:            {:.3}  (TTFT infer analog)", l.prompt_eval_ms);
+        println!("  prompt_eval_ms:            {:.3}", l.prompt_eval_ms);
         println!("  prompt_token_count:        {}", l.prompt_tokens);
         if l.prompt_tokens != m.prompt_token_count {
             eprintln!(
@@ -170,7 +182,7 @@ fn print_interactive_human(m: &InteractiveTtftMetrics, llama: Option<&LlamaCompl
             );
         }
         println!(
-            "  ratio ttft_infer rust/llama: {:.2}",
+            "  ratio_ttft_infer (rust/llama): {:.2}  (rust sum includes prepare+head; llama is prompt-eval only)",
             m.ttft_infer_ms / l.prompt_eval_ms
         );
     }
@@ -180,10 +192,10 @@ fn print_decode_human(m: &DecodeThroughputMetrics) {
     println!("=== decode-throughput ===");
     println!("  prompt_token_count:   {}", m.prompt_token_count);
     println!("  decode_tokens:        {}", m.decode_tokens);
-    println!("  prefill_setup_ms:     {:.3}", m.prefill_setup_ms);
-    println!("  decode_wall_ms:       {:.3}", m.decode_wall_ms);
+    println!("  warm_prefill_ms:      {:.3}", m.warm_prefill_ms);
+    println!("  decode_elapsed_ms:    {:.3}", m.decode_elapsed_ms);
     println!("  decode_tokens_per_sec:{:.3}", m.decode_tokens_per_sec);
-    let pps = (m.prompt_token_count as f64) / (m.prefill_setup_ms / 1e3).max(f64::EPSILON);
+    let pps = (m.prompt_token_count as f64) / (m.warm_prefill_ms / 1e3).max(f64::EPSILON);
     println!("  prefill_tokens_per_s: {pps:.3}  (rough pp analog)");
 }
 

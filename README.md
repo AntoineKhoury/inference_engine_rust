@@ -67,7 +67,7 @@ Shared flags: **`-m`** / **`--model`**, **`-t`** / **`--tokenizer`**, **`--promp
 
 | date | exp | machine_id | commit | delta_vs_previous | bench_command | prompt_toks | rust_ttft_infer_ms | llama_ttft_infer_ms | ratio_ttft | rust_decode_tps | llama_decode_tps | llama_t | llama_ngl | speed_target | notes |
 |------|-----|------------|--------|-------------------|---------------|-------------|--------------------|--------------------|------------|-----------------|------------------|---------|-----------|--------------|-------|
-| 2026-04-14 | exp-001 | ak-mbp-m1 | ab060e0 | baseline | `bench_compare interactive-ttft --compare-llama` (crate defaults: llama `--no-warmup`, `-t 1`, `-ngl 0`) | 6 | 64411.6 | 1592.8 | 40.4 | — | — | 1 | 0 | establish TTFT infer baseline vs Homebrew llama | Rust: ~64.2 s in `prefill_forward`, ~202 ms first token; llama load ~1.59 s excluded from ttft infer. Default prompt `Rust will rule the`, Mistral 7B Q4_K_M. |
+| 2026-04-14 | exp-001 | ak-mbp-m1 | ab060e0 | baseline | `bench_compare interactive-ttft --compare-llama` (crate defaults: llama `--no-warmup`, `-t 1`, `-ngl 0`) | 6 | 64411.6 | 1592.8 | 40.4 | — | — | 1 | 0 | establish TTFT infer baseline vs Homebrew llama | Rust: ~64.2 s `prompt_eval_ms`, ~202 ms `lm_head_sample_ms`; llama load ~1.59 s excluded from ttft infer. Default prompt `Rust will rule the`, Mistral 7B Q4_K_M. |
 
 ### System profile (same machine → same `machine_id`)
 
@@ -75,7 +75,7 @@ Update when hardware or llama install changes.
 
 | machine_id | machine label | CPU / SoC | RAM | OS | llama.cpp install | notes |
 |------------|---------------|-----------|-----|----|-------------------|-------|
-| ak-mbp-m1 | MacBook Pro (Antoine) | Apple M1 | *(fill)* | macOS | Homebrew `llama.cpp` | Matches **exp-001**; adjust RAM/OS as needed. |
+| ak-mbp-m1 | MacBook Pro (M1) | Apple M1 | *(fill)* | macOS | Homebrew `llama.cpp` | Matches **exp-001**; adjust RAM/OS as needed. |
 
 ## Greedy CLI (generation)
 
