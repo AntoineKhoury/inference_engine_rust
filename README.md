@@ -86,4 +86,6 @@ cargo run --release -- -n 32 -m model/mistral-7b-v0.1.Q4_K_M.gguf "Hello"
 
 ## License / credits
 
-See repository files for license; GGUF models and tokenizer files are third-party.
+**Code in this repository** is licensed under **MIT OR Apache-2.0** (see [`LICENSE`](LICENSE), [`LICENSE-MIT`](LICENSE-MIT), [`LICENSE-APACHE`](LICENSE-APACHE)). You may use it as a library or binary under either license.
+
+GGUF model weights, tokenizer files, and other third-party assets keep their own terms.
