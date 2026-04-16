@@ -4,7 +4,7 @@ Inference engine for LLMs in the **GGUF** format (Rust).
 
 ## Requirements
 
-- **Rust** (edition 2024 toolchain)
+- **Rust:** **1.85 or newer** stable. This crate uses **`edition = "2024"`**, which requires rustc **1.85+**. The declared MSRV is in **`Cargo.toml`** as **`rust-version`** (Cargo will warn if your toolchain is too old).
 - **Optional (heavier tests & benchmarks):** a Mistral-7B-v0.1–style **GGUF** (e.g. `Q4_K_M`) and **`tokenizer.model`** at the repo root — see [`tests/common/mod.rs`](tests/common/mod.rs) for the pinned filename and HuggingFace URLs.
 
 ## Quick test (no model)
@@ -15,7 +15,7 @@ Runs unit tests and fast integration checks:
 cargo test
 ```
 
-This exercises loaders, ops, tokenizer, embeddings, and [`tests/bench_compare_cli.rs`](tests/bench_compare_cli.rs) (CLI `--help` only). Several integration tests are **`#[ignore]`** until you add weights; they still compile and show up as ignored.
+This exercises loaders, ops, tokenizer, embeddings, and the [`bench_compare`](src/bin/bench_compare.rs) binary (CLI `--help` only). Several integration tests are **`#[ignore]`** until you add weights; they still compile and show up as ignored.
 
 ## Correctness vs reference (optional)
 

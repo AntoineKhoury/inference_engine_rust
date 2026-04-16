@@ -2,6 +2,7 @@
 name = "inference_engine_rust"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
 description = "GGUF LLM inference engine (CPU): load, prefill, decode, benchmarks"
