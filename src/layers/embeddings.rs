@@ -252,6 +252,7 @@ mod tests {
     use crate::model_loader::file_loader::read_file;
     
     #[test]
+    #[ignore = "requires model/mistral-7b-v0.1.Q4_K_M.gguf at repo root (cargo test -- --ignored)"]
     fn test_embedding_lookup() {
         // Load the model
         let path = "model/mistral-7b-v0.1.Q4_K_M.gguf";
@@ -282,6 +283,7 @@ mod tests {
     }
     
     #[test]
+    #[ignore = "requires model/mistral-7b-v0.1.Q4_K_M.gguf at repo root (cargo test -- --ignored)"]
     fn test_get_embedding_dim() {
         let path = "model/mistral-7b-v0.1.Q4_K_M.gguf";
         let mut gguf_data = read_file(path).expect("Failed to read GGUF file");
@@ -297,6 +299,7 @@ mod tests {
     }
     
     #[test]
+    #[ignore = "requires model/mistral-7b-v0.1.Q4_K_M.gguf at repo root (cargo test -- --ignored)"]
     fn test_get_vocab_size() {
         let path = "model/mistral-7b-v0.1.Q4_K_M.gguf";
         let mut gguf_data = read_file(path).expect("Failed to read GGUF file");
@@ -312,6 +315,7 @@ mod tests {
     }
     
     #[test]
+    #[ignore = "requires model/mistral-7b-v0.1.Q4_K_M.gguf at repo root (cargo test -- --ignored)"]
     fn test_out_of_vocab_error() {
         let path = "model/mistral-7b-v0.1.Q4_K_M.gguf";
         let mut gguf_data = read_file(path).expect("Failed to read GGUF file");

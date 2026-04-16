@@ -67,6 +67,7 @@ mod test {
     use super::*;
 
     #[test]
+    #[ignore = "requires ./model/mistral-7b-v0.1.Q4_K_M.gguf (cargo test -- --ignored)"]
     fn test_file_read_metadata() { 
         // Test reading metadata only
         let result = read_file("./model/mistral-7b-v0.1.Q4_K_M.gguf");
@@ -74,6 +75,7 @@ mod test {
     }
     
     #[test]
+    #[ignore = "requires ./model/mistral-7b-v0.1.Q4_K_M.gguf (cargo test -- --ignored)"]
     fn test_load_tensors(){
         // Test loading actual tensor data
         let mut gguf_data = read_file("./model/mistral-7b-v0.1.Q4_K_M.gguf").unwrap();
@@ -97,6 +99,7 @@ mod test {
     }
     
     #[test]
+    #[ignore = "requires ./model/mistral-7b-v0.1.Q4_K_M.gguf (cargo test -- --ignored)"]
     fn test_load_single_tensor() {
         // Test loading just one small tensor to verify the loading logic works
         let gguf_data = read_file("./model/mistral-7b-v0.1.Q4_K_M.gguf").unwrap();
