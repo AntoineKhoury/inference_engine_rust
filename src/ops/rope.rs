@@ -35,16 +35,16 @@ pub fn rope(
 mod test {
     #[test]
     fn test_rope_dim2() {
-        let mut v = vec![1.0, 2.0];
+        let mut v = [1.0, 2.0];
         super::rope(&mut v[..], 1.0, 1, 2, 2).unwrap();
-        assert!((v[0] + 1.1426396637).abs() < 1e-5);
-        assert!((v[1] - 1.9220755966).abs() < 1e-5);
+        assert!((v[0] + 1.142_639_6).abs() < 1e-5);
+        assert!((v[1] - 1.922_075_6).abs() < 1e-5);
     }
 
     /// Pairs must be (0,1) and (2,3), not overlapping (0,1),(1,2),(2,3).
     #[test]
     fn test_rope_dim4_pairs_non_overlapping() {
-        let mut v = vec![1.0f32, 0.0, 1.0, 0.0];
+        let mut v = [1.0f32, 0.0, 1.0, 0.0];
         super::rope(&mut v[..], 10000.0, 0, 4, 4).unwrap();
         assert!((v[0] - 1.0).abs() < 1e-5 && (v[1] - 0.0).abs() < 1e-5);
         assert!((v[2] - 1.0).abs() < 1e-5 && (v[3] - 0.0).abs() < 1e-5);

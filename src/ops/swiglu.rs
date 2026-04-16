@@ -53,6 +53,6 @@ mod test {
 
         // SiLU(0)*1 = 0; SiLU(1)*1 ≈ 0.731
         assert!((output[0] - 0.0).abs() < 1e-5);
-        assert!((output[1] - 0.7310585786).abs() < 1e-3);
+        assert!((output[1] - 0.731_058_6).abs() < 1e-3);
     }
 }

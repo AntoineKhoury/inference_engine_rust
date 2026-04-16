@@ -29,15 +29,15 @@ pub fn read_file(path: &str) -> Result<GGUFData, EngineError> {
 
     // Read version, 4 bytes, so u32
     let version = reader.read_u32()?;
-    log::debug!("GGUF version: {}", version);
+    log::debug!("GGUF version: {version}");
 
     // Read Tensor Count, 8 bytes long
     let tensor_count = reader.read_u64()?;
-    log::debug!("GGUF tensor count: {}", tensor_count);
+    log::debug!("GGUF tensor count: {tensor_count}");
 
     // Read Metadata Count, 8 bytes long
     let metadata_count = reader.read_u64()?;
-    log::debug!("GGUF metadata count: {}", metadata_count);
+    log::debug!("GGUF metadata count: {metadata_count}");
     
 
     // Read metadata tree

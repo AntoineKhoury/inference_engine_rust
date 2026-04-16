@@ -184,7 +184,7 @@ fn print_decode_human(m: &DecodeThroughputMetrics) {
     println!("  decode_wall_ms:       {:.3}", m.decode_wall_ms);
     println!("  decode_tokens_per_sec:{:.3}", m.decode_tokens_per_sec);
     let pps = (m.prompt_token_count as f64) / (m.prefill_setup_ms / 1e3).max(f64::EPSILON);
-    println!("  prefill_tokens_per_s: {:.3}  (rough pp analog)", pps);
+    println!("  prefill_tokens_per_s: {pps:.3}  (rough pp analog)");
 }
 
 fn main() -> Result<(), EngineError> {

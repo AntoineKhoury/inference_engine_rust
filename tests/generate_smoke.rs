@@ -38,8 +38,7 @@ fn logits_top2(logits: &[f32]) -> Option<(usize, f32, usize, f32)> {
         std::mem::swap(&mut i1, &mut i2);
         std::mem::swap(&mut v1, &mut v2);
     }
-    for i in 2..logits.len() {
-        let v = logits[i];
+    for (i, &v) in logits.iter().enumerate().skip(2) {
         if v > v1 {
             i2 = i1;
             v2 = v1;

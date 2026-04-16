@@ -13,39 +13,39 @@ pub fn softmax(
 
     // Find max value for numerical stability
     let mut max = input[0];
-    for i in 0..input.len(){
-        if input[i] > max{
-            max = input[i];
+    for &x in input.iter() {
+        if x > max {
+            max = x;
         }
     }
-    let mut sum_exp = 0.0;
-    for i in 0..input.len(){
-        sum_exp += (input[i]-max).exp();
+    let mut sum_exp = 0.0f32;
+    for &x in input.iter() {
+        sum_exp += (x - max).exp();
     }
 
-    for i in 0..input.len(){
-        output[i] = (input[i]-max).exp()/sum_exp;
+    for (out_slot, &x) in output.iter_mut().zip(input.iter()) {
+        *out_slot = (x - max).exp() / sum_exp;
     }
 
     Ok(())
 }
 
 
-mod test{
-    use super::*;
+#[cfg(test)]
+mod test {
+    use super::softmax;
+
     #[test]
-    fn simple_softmax_test(){
+    fn simple_softmax_test() {
         let input = vec![0.0, 1.0];
         let mut output = vec![0.0; input.len()];
-        
+
         softmax(&input, &mut output).unwrap();
-        
-        // Check that outputs sum to 1.0 (probability distribution)
+
         let sum: f32 = output.iter().sum();
         assert!((sum - 1.0).abs() < 1e-5, "Softmax outputs should sum to 1.0");
-        
-        // Check individual values
-        assert!((output[0] - 0.26894142).abs() < 1e-5);
-        assert!((output[1] - 0.73105858).abs() < 1e-5);
+
+        assert!((output[0] - 0.268_941_4).abs() < 1e-5);
+        assert!((output[1] - 0.731_058_6).abs() < 1e-5);
     }
 }

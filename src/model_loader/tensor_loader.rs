@@ -6,7 +6,7 @@ use crate::EngineError;
 use crate::model_loader::gguf_types::TensorInfo;
 use crate::model_loader::reader::Reader;
 use crate::model_loader::tensor::GgmlType;
-use crate::ops::quant::quant_K_handler::{Q4K_BLOCK_SIZE, Q6K_BLOCK_SIZE};
+use crate::ops::quant::quant_k_handler::{Q4K_BLOCK_SIZE, Q6K_BLOCK_SIZE};
 const BLOCK_ELEMENTS: usize = 256;
 
 /// Load a single tensor from the file based on TensorInfo.
@@ -52,11 +52,11 @@ fn expected_byte_len(
     match tensor_type {
         crate::core::tensor::TensorType::F32 => Ok(num_elements * 4),
         crate::core::tensor::TensorType::Q4K => {
-            let num_blocks = (num_elements + BLOCK_ELEMENTS - 1) / BLOCK_ELEMENTS;
+            let num_blocks = num_elements.div_ceil(BLOCK_ELEMENTS);
             Ok(num_blocks * Q4K_BLOCK_SIZE)
         }
         crate::core::tensor::TensorType::Q6K => {
-            let num_blocks = (num_elements + BLOCK_ELEMENTS - 1) / BLOCK_ELEMENTS;
+            let num_blocks = num_elements.div_ceil(BLOCK_ELEMENTS);
             Ok(num_blocks * Q6K_BLOCK_SIZE)
         }
     }

@@ -98,7 +98,7 @@ pub fn dequantize_q6k_block(
         for l in 0..32 {
             let is = l / 16;
             let q1 = ((ql[ql_off + l] & 0xF) as i32
-                | (((qh[qh_off + l] >> 0) & 3) as i32) << 4)
+                | ((qh[qh_off + l] & 3) as i32) << 4)
                 - 32;
             let q2 = ((ql[ql_off + l + 32] & 0xF) as i32
                 | (((qh[qh_off + l] >> 2) & 3) as i32) << 4)

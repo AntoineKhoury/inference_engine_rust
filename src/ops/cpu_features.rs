@@ -1,13 +1,15 @@
-/// CPU feature detection for SIMD capabilities
-/// Detects available instruction sets at runtime to enable optimized kernels
-/// 
-/// Architecture Support:
-/// - ARM64 (aarch64): Mac M1, Raspberry Pi 5 - NEON is standard
-/// - ARMv7: Older Raspberry Pi - NEON may be optional
-/// 
-/// This module uses Rust's built-in CPU feature detection macros which are
-/// compile-time gated but runtime-checked, ensuring we only call intrinsics
-/// on architectures that support them.
+//! CPU feature detection for SIMD capabilities.
+//!
+//! Detects available instruction sets at runtime to enable optimized kernels.
+//!
+//! # Architecture support
+//!
+//! - ARM64 (aarch64): Mac M1, Raspberry Pi 5 — NEON is standard
+//! - ARMv7: older Raspberry Pi — NEON may be optional
+//!
+//! This module uses Rust's built-in CPU feature detection macros, which are
+//! compile-time gated but runtime-checked, so intrinsics are only called on
+//! supported architectures.
 
 #[cfg(target_arch = "aarch64")]
 use std::arch::is_aarch64_feature_detected;
@@ -19,10 +21,13 @@ use std::arch::is_arm_feature_detected;
 /// This struct is populated at startup and used for kernel dispatch
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CpuFeatures {
-    /// ARM NEON (Advanced SIMD) support
+    /// ARM NEON (Advanced SIMD) support.
+    ///
     /// NEON provides 128-bit SIMD registers with operations on:
+    ///
     /// - 16×u8, 8×u16, 4×u32, 4×f32, 2×f64
-    /// Required for efficient quantized matmul operations
+    ///
+    /// Required for efficient quantized matmul operations.
     pub neon: bool,
     
     /// ARMv8.2+ Dot Product instructions (optional)

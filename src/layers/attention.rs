@@ -70,36 +70,62 @@ impl KVCache {
         Ok(())
     }
 
-    pub fn get_k_slice(&self, position: usize, kv_head: usize) -> &[f32] {
-        assert!(
-            position < self.current_pos,
-            "Position out of bounds for k slice"
-        );
-        assert!(kv_head < self.n_kv_heads, "KV head index out of bounds");
-
+    /// Key vector for timestep `position` and KV head `kv_head` (length `head_dim`).
+    pub fn get_k_slice(&self, position: usize, kv_head: usize) -> Result<&[f32], KVCacheError> {
+        if position >= self.current_pos {
+            return Err(KVCacheError::PositionOutOfBounds {
+                position,
+                current_pos: self.current_pos,
+            });
+        }
+        if kv_head >= self.n_kv_heads {
+            return Err(KVCacheError::KvHeadOutOfBounds {
+                kv_head,
+                n_kv_heads: self.n_kv_heads,
+            });
+        }
         let start_pos = position * self.n_kv_heads * self.head_dim + kv_head * self.head_dim;
-        &self.k_cache[start_pos..start_pos + self.head_dim]
+        Ok(&self.k_cache[start_pos..start_pos + self.head_dim])
     }
 
-    pub fn get_v_slice(&self, position: usize, kv_head: usize) -> &[f32] {
-        assert!(
-            position < self.current_pos,
-            "Position out of bounds for v slice"
-        );
-        assert!(kv_head < self.n_kv_heads, "KV head index out of bounds");
-
+    /// Value vector for timestep `position` and KV head `kv_head` (length `head_dim`).
+    pub fn get_v_slice(&self, position: usize, kv_head: usize) -> Result<&[f32], KVCacheError> {
+        if position >= self.current_pos {
+            return Err(KVCacheError::PositionOutOfBounds {
+                position,
+                current_pos: self.current_pos,
+            });
+        }
+        if kv_head >= self.n_kv_heads {
+            return Err(KVCacheError::KvHeadOutOfBounds {
+                kv_head,
+                n_kv_heads: self.n_kv_heads,
+            });
+        }
         let start_pos = position * self.n_kv_heads * self.head_dim + kv_head * self.head_dim;
-        &self.v_cache[start_pos..start_pos + self.head_dim]
+        Ok(&self.v_cache[start_pos..start_pos + self.head_dim])
     }
 }
 
 #[derive(Debug, Error)]
 pub enum KVCacheError {
     #[error("KVCache is Full: max len is {max_len}.")]
-    KVCacheFull{max_len: usize},
-    
+    KVCacheFull { max_len: usize },
+
     #[error("Input size of k or v for KVCache isn't correct, size should be {k_size}")]
     KVDimMismatch { k_size: usize },
+
+    #[error("KV cache position {position} is out of bounds (current_pos is {current_pos})")]
+    PositionOutOfBounds {
+        position: usize,
+        current_pos: usize,
+    },
+
+    #[error("KV head index {kv_head} is out of bounds (n_kv_heads is {n_kv_heads})")]
+    KvHeadOutOfBounds {
+        kv_head: usize,
+        n_kv_heads: usize,
+    },
 }
 
 /// Undo HF→GGUF `LlamaModel.permute` on **one row** of Q or K activations (Llama-style GGUF only;
@@ -235,14 +261,14 @@ pub fn prefill_attention_layer(
             let q = &q_data[q_start..q_start + head_dim];
 
             let mut scores = vec![0.0f32; pos + 1];
-            for j in 0..=pos {
+            for (j, score_slot) in scores.iter_mut().enumerate().take(pos + 1) {
                 let k_start = j * kv_dim + kv_head * head_dim;
                 let k = &k_data[k_start..k_start + head_dim];
                 let mut dot = 0.0f32;
                 for d in 0..head_dim {
                     dot += q[d] * k[d];
                 }
-                scores[j] = dot * scale;
+                *score_slot = dot * scale;
             }
 
             let mut weights_buf = vec![0.0f32; pos + 1];
@@ -250,10 +276,9 @@ pub fn prefill_attention_layer(
 
             let out_start = pos * hidden_dim + head * head_dim;
             let out = &mut attn_out[out_start..out_start + head_dim];
-            for j in 0..=pos {
+            for (j, &w) in weights_buf.iter().enumerate().take(pos + 1) {
                 let v_start = j * kv_dim + kv_head * head_dim;
                 let v = &v_data[v_start..v_start + head_dim];
-                let w = weights_buf[j];
                 for d in 0..head_dim {
                     out[d] += w * v[d];
                 }
@@ -363,22 +388,21 @@ pub fn decode_attention_layer(
         let q = &q_data[q_start..q_start + head_dim];
 
         let mut scores = vec![0.0f32; total_pos];
-        for j in 0..total_pos {
-            let k_vec = kv_cache.get_k_slice(j, kv_head);
+        for (j, score_slot) in scores.iter_mut().enumerate().take(total_pos) {
+            let k_vec = kv_cache.get_k_slice(j, kv_head)?;
             let mut dot = 0.0f32;
             for d in 0..head_dim {
                 dot += q[d] * k_vec[d];
             }
-            scores[j] = dot * scale;
+            *score_slot = dot * scale;
         }
 
         let mut weights_buf = vec![0.0f32; total_pos];
         softmax(&scores, &mut weights_buf)?;
 
         let out = &mut attn_out[head * head_dim..(head + 1) * head_dim];
-        for j in 0..total_pos {
-            let v_vec = kv_cache.get_v_slice(j, kv_head);
-            let w = weights_buf[j];
+        for (j, &w) in weights_buf.iter().enumerate().take(total_pos) {
+            let v_vec = kv_cache.get_v_slice(j, kv_head)?;
             for d in 0..head_dim {
                 out[d] += w * v_vec[d];
             }

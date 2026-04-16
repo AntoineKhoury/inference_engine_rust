@@ -18,14 +18,14 @@ pub fn get_tensors_metadata<R: BufRead + Seek>(
         }
         all_tensors.push(curr_tensor);
     }
-    log::debug!("GGUF unique tensor type_ids: {:?}", unique_types);
+    log::debug!("GGUF unique tensor type_ids: {unique_types:?}");
     Ok(all_tensors)
 }
 
 pub fn get_tensor_metadata<R: BufRead + Seek>(reader: &mut Reader<R>) -> Result<TensorInfo, EngineError> {
     let name = reader.read_string()?;
     let n_dimensions = reader.read_u32()? as usize;
-    let mut dimensions = Vec::with_capacity(n_dimensions as usize);
+    let mut dimensions = Vec::with_capacity(n_dimensions);
     for _ in 0..n_dimensions{
         dimensions.push(reader.read_u64()? as usize);
     }

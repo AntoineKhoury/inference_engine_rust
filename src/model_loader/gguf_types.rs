@@ -109,7 +109,7 @@ impl GGUFData {
         let mut reader = crate::model_loader::reader::Reader::new(buf_reader, 0);
         
         let total_tensors = self.tensors_metadata.len();
-        info!("Starting to load {} tensors...", total_tensors);
+        info!("Starting to load {total_tensors} tensors...");
         
         for (idx, tensor_info) in self.tensors_metadata.iter().enumerate() {
             let progress = ((idx + 1) * 100) / total_tensors;
@@ -132,7 +132,7 @@ impl GGUFData {
             self.tensors.insert(tensor_info.name.clone(), tensor);
         }
         
-        info!("Successfully loaded all {} tensors", total_tensors);
+        info!("Successfully loaded all {total_tensors} tensors");
         Ok(())
     }
     

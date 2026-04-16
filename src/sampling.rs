@@ -41,7 +41,7 @@ pub fn argmax_index(logits: &[f32]) -> Option<usize> {
 pub fn sample_greedy(logits: &[f32]) -> Result<u32, SamplingError> {
     argmax_index(logits)
         .map(|i| i as u32)
-        .ok_or_else(|| {
+        .ok_or({
             if logits.is_empty() {
                 SamplingError::EmptyLogits
             } else {

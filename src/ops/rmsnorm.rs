@@ -14,34 +14,36 @@ pub fn rmsnorm(
     debug_assert_eq!(input.len(), weights.len(), "Dimension missmatch for RMSNorm");
 
     let mut sum_squared: f32 = 0.0;
-    let dim: usize  = input.len();
+    let dim: usize = input.len();
 
-    for i in 0..dim{
-        sum_squared += input[i].powi(2)
+    for &x in input.iter() {
+        sum_squared += x.powi(2);
     }
-    let mean_squared: f32 = sum_squared/(dim as f32);
+    let mean_squared: f32 = sum_squared / (dim as f32);
     let rms = (mean_squared + epsilon).sqrt();
-    for i in 0..dim{
-        output[i] = input[i] * weights[i]/rms;
+    for ((out_slot, &x), &w) in output.iter_mut().zip(input.iter()).zip(weights.iter()) {
+        *out_slot = x * w / rms;
     }
     Ok(())
 }
 
-mod test{
-    use super::*;
+#[cfg(test)]
+mod test {
+    use super::rmsnorm;
+
     #[test]
-    fn test_simple_rms(){
-        let input: Vec<f32>= vec![0.5, 1.0, 1.5];
+    fn test_simple_rms() {
+        let input: Vec<f32> = vec![0.5, 1.0, 1.5];
         let weights: Vec<f32> = vec![0.2, 0.3, 0.4];
         let epsilon: f32 = 1e-6;
-        let mut output: Vec<f32>  = vec![0.0; input.len()];
-        
+        let mut output: Vec<f32> = vec![0.0; input.len()];
+
         rmsnorm(&input, &weights, epsilon, &mut output).unwrap();
-        
-        let expected = vec![0.092582, 0.277746, 0.555492];
-        
-        for i in 0..input.len(){
-            assert!((output[i]-expected[i]).abs() < 1e-3)
+
+        let expected = [0.092_582, 0.277_746, 0.555_492];
+
+        for i in 0..input.len() {
+            assert!((output[i] - expected[i]).abs() < 1e-3);
         }
     }
 }

@@ -1,7 +1,7 @@
 use crate::EngineError;
 use crate::model_loader::gguf_types::GGUFData;
 use crate::core::tensor::{Tensor, TensorType};
-use crate::ops::quant::quant_K_handler::{
+use crate::ops::quant::quant_k_handler::{
     dequantize_q4k_block, dequantize_q6k_block, Q4K_BLOCK_SIZE, Q6K_BLOCK_SIZE,
 };
 const BLOCK_ELEMENTS: usize = 256;
@@ -15,38 +15,32 @@ fn embedding_buffer_index(hidden_dim: usize, token_id: u32, h: usize) -> usize {
     (token_id as usize) * hidden_dim + h
 }
 
-/// Embedding lookup operation for converting token IDs to embedding vectors
-/// 
-/// This module provides efficient embedding lookup, which is the first step
-/// in the inference pipeline. Token IDs (from the tokenizer) are converted
-/// to dense embedding vectors that can be processed by the transformer layers.
-/// 
-/// # Architecture Notes
-/// - Embeddings are typically stored as F32 (unquantized) for frequent access
-/// - Shape: [vocab_size, hidden_dim] (e.g., [32000, 4096] for Mistral-7B)
-/// - Lookup is a simple row selection: `embedding = weights[token_id]`
-/// - This is a memory-bound operation, so cache locality matters
-
-/// Lookup embeddings for a sequence of token IDs
-/// 
+/// Lookup embeddings for a sequence of token IDs.
+///
+/// This is the usual first step in the inference pipeline: tokenizer IDs → dense rows.
+///
 /// # Arguments
-/// * `gguf_data` - The loaded GGUF model data containing all tensors
-/// * `token_ids` - Vector of token IDs to convert to embeddings
-/// 
+///
+/// * `gguf_data` — loaded GGUF model data
+/// * `token_ids` — IDs to look up
+///
 /// # Returns
-/// * `Result<Vec<Vec<f32>>>` - Vector of embedding vectors, one per token
-///   Each inner vector has length `hidden_dim` (e.g., 4096 for Mistral-7B)
-/// 
+///
+/// One `Vec<f32>` per token, each of length `hidden_dim`.
+///
 /// # Errors
-/// Returns an error if:
-/// - The embedding tensor is not found in the model
-/// - Token IDs are out of vocabulary range
-/// - The embedding tensor has unexpected shape or type
-/// 
+///
+/// Missing embedding tensor, out-of-vocab IDs, or unexpected shape/dtype.
+///
 /// # Performance
-/// This is a simple memory lookup operation. For a sequence of length N:
-/// - Memory access: N * hidden_dim floats (sequential, cache-friendly)
-/// - No computation, just data movement
+///
+/// For sequence length N: about `N * hidden_dim` float reads (memory-bound; locality matters).
+///
+/// # Architecture notes
+///
+/// - Embeddings are often F32 for frequent access.
+/// - Logical shape is `[vocab_size, hidden_dim]` (or transposed in some GGUFs).
+/// - Row selection: `embedding = weights[token_id]`.
 pub fn lookup_embeddings(
     gguf_data: &mut GGUFData,
     file_path: &str,
@@ -118,10 +112,10 @@ fn lookup_embedding_rows(
     // Mistral uses [hidden_dim, vocab_size] = [4096, 32000]
     let (hidden_dim, vocab_size) = if dims[0] < dims[1] {
         // Likely [hidden_dim, vocab_size] - Mistral format
-        (dims[0] as usize, dims[1] as usize)
+        (dims[0], dims[1])
     } else {
         // Likely [vocab_size, hidden_dim] - standard format
-        (dims[1] as usize, dims[0] as usize)
+        (dims[1], dims[0])
     };
     
     // Validate token IDs are within vocabulary range
@@ -139,10 +133,10 @@ fn lookup_embedding_rows(
     match embedding_tensor.dtype() {
         TensorType::F32 => {
             for &token_id in token_ids {
-                let mut embedding = Vec::with_capacity(hidden_dim);
-                for h in 0..hidden_dim {
+                let mut embedding = vec![0.0f32; hidden_dim];
+                for (h, slot) in embedding.iter_mut().enumerate() {
                     let idx = embedding_buffer_index(hidden_dim, token_id, h);
-                    embedding.push(embedding_tensor.f32_at(idx)?);
+                    *slot = embedding_tensor.f32_at(idx)?;
                 }
                 embeddings.push(embedding);
             }
@@ -152,7 +146,7 @@ fn lookup_embedding_rows(
                 let mut embedding = vec![0.0f32; hidden_dim];
                 let mut cached_block = usize::MAX;
                 let mut decoded = [0.0f32; BLOCK_ELEMENTS];
-                for h in 0..hidden_dim {
+                for (h, slot) in embedding.iter_mut().enumerate() {
                     let idx = embedding_buffer_index(hidden_dim, token_id, h);
                     let block_idx = idx / BLOCK_ELEMENTS;
                     let el = idx % BLOCK_ELEMENTS;
@@ -166,7 +160,7 @@ fn lookup_embedding_rows(
                         dequantize_q4k_block(block, &mut decoded)?;
                         cached_block = block_idx;
                     }
-                    embedding[h] = decoded[el];
+                    *slot = decoded[el];
                 }
                 embeddings.push(embedding);
             }
@@ -176,7 +170,7 @@ fn lookup_embedding_rows(
                 let mut embedding = vec![0.0f32; hidden_dim];
                 let mut cached_block = usize::MAX;
                 let mut decoded = [0.0f32; BLOCK_ELEMENTS];
-                for h in 0..hidden_dim {
+                for (h, slot) in embedding.iter_mut().enumerate() {
                     let idx = embedding_buffer_index(hidden_dim, token_id, h);
                     let block_idx = idx / BLOCK_ELEMENTS;
                     let el = idx % BLOCK_ELEMENTS;
@@ -190,7 +184,7 @@ fn lookup_embedding_rows(
                         dequantize_q6k_block(block, &mut decoded)?;
                         cached_block = block_idx;
                     }
-                    embedding[h] = decoded[el];
+                    *slot = decoded[el];
                 }
                 embeddings.push(embedding);
             }
@@ -224,7 +218,7 @@ pub fn get_embedding_dim(gguf_data: &GGUFData) -> Result<usize, EngineError> {
     
     // Handle both layouts: [vocab_size, hidden_dim] or [hidden_dim, vocab_size]
     // Return the smaller dimension as hidden_dim
-    Ok(if dims[0] < dims[1] { dims[0] as usize } else { dims[1] as usize })
+    Ok(if dims[0] < dims[1] { dims[0] } else { dims[1] })
 }
 
 /// Get the vocabulary size from the embedding tensor
@@ -249,7 +243,7 @@ pub fn get_vocab_size(gguf_data: &GGUFData) -> Result<usize, EngineError> {
     
     // Handle both layouts: [vocab_size, hidden_dim] or [hidden_dim, vocab_size]
     // Return the larger dimension as vocab_size
-    Ok(if dims[0] > dims[1] { dims[0] as usize } else { dims[1] as usize })
+    Ok(if dims[0] > dims[1] { dims[0] } else { dims[1] })
 }
 
 #[cfg(test)]

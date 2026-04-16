@@ -1,10 +1,10 @@
-/// 2D weight layout matches **ggml / GGUF** (same as llama.cpp): for `ne = [ne0, ne1]`,
-/// element `(i0, i1)` is at **`i0 + i1 * ne0`** (first dimension stride-1), **not** C row-major
-/// `i0 * ne1 + i1`. Matmul uses `W(input_kk, out_col)` at `kk + col * K` with `K = ne0`.
+//! 2D weight layout matches **ggml / GGUF** (same as llama.cpp): for `ne = [ne0, ne1]`,
+//! element `(i0, i1)` is at **`i0 + i1 * ne0`** (first dimension stride-1), **not** C row-major
+//! `i0 * ne1 + i1`. Matmul uses `W(input_kk, out_col)` at `kk + col * K` with `K = ne0`.
 
 use crate::core::tensor::{Tensor, TensorType};
 use crate::EngineError;
-use crate::ops::quant::quant_K_handler::{
+use crate::ops::quant::quant_k_handler::{
     dequantize_q4k_block, dequantize_q6k_block, Q4K_BLOCK_SIZE, Q6K_BLOCK_SIZE,
 };
 
@@ -140,7 +140,7 @@ fn matmul_f32_q4k(
     let weight_bytes = weight.buffer();
 
     let total_weights = k * n;
-    let total_blocks = (total_weights + BLOCK_ELEMENTS - 1) / BLOCK_ELEMENTS;
+    let total_blocks = total_weights.div_ceil(BLOCK_ELEMENTS);
     let expected_bytes = total_blocks * Q4K_BLOCK_SIZE;
     if weight_bytes.len() < expected_bytes {
         return Err(EngineError::MatMul(
@@ -230,7 +230,7 @@ fn matmul_f32_q6k(
     let weight_bytes = weight.buffer();
 
     let total_weights = k * n;
-    let total_blocks = (total_weights + BLOCK_ELEMENTS - 1) / BLOCK_ELEMENTS;
+    let total_blocks = total_weights.div_ceil(BLOCK_ELEMENTS);
     let expected_bytes = total_blocks * Q6K_BLOCK_SIZE;
     if weight_bytes.len() < expected_bytes {
         return Err(EngineError::MatMul(
