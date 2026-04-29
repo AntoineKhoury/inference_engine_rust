@@ -94,7 +94,7 @@ fn main() -> Result<(), EngineError> {
     let tok_prompt = model.tokenizer_prompt();
 
     let prompt_ids = tokenizer.encode_with_prompt_config(&prompt, tok_prompt)?;
-    let mut session = InferenceSession::new(&model);
+    let mut session = InferenceSession::new(&model)?;
     let mut state = session.prefill(&prompt_ids)?;
 
     let stop_id = tok_prompt.eos_token_id;

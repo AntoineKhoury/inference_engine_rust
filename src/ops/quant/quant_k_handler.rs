@@ -1,7 +1,7 @@
 use crate::EngineError;
 use crate::ops::quant::utils::f16_to_f32;
 
-/// `scale * q` with the convention that `0 * ∞` is `0` (IEEE would yield NaN).
+/// `scale * q` with the convention that `0 * infinity` is `0` (IEEE would yield NaN).
 #[inline]
 fn scale_times_quant_f64(scale: f64, q: f64) -> f64 {
     if q == 0.0 { 0.0 } else { scale * q }
@@ -53,7 +53,7 @@ pub fn dequantize_q4k_block(block: &[u8], out: &mut [f32]) -> Result<(), EngineE
     let mut q_ptr = 0usize;
     let mut is = 0i32;
     for _ in 0..4 {
-        // j += 64 in ggml: four iterations cover 256 outputs
+        // j += 64 in ggml: four iterations cover 256 outputs.
         let (sc, m) = extract_scale_min_k4(is as usize, scales);
         let (sc_b, m_b) = extract_scale_min_k4((is + 1) as usize, scales);
         let sc0 = sc as f64;
@@ -118,7 +118,7 @@ pub fn dequantize_q6k_block(block: &[u8], out: &mut [f32]) -> Result<(), EngineE
                 | (((qh[qh_off + l] >> 6) & 3) as i32) << 4)
                 - 32;
 
-            // `block_q6_K.scales` is16× int8 in ggml (`dequantize_row_q6_K`); must not decode as u8.
+            // `block_q6_K.scales` is 16x int8 in ggml (`dequantize_row_q6_K`); must not decode as u8.
             let s0 = (sc_slice[is] as i8) as f64;
             let s2 = (sc_slice[is + 2] as i8) as f64;
             let s4 = (sc_slice[is + 4] as i8) as f64;
@@ -134,7 +134,7 @@ pub fn dequantize_q6k_block(block: &[u8], out: &mut [f32]) -> Result<(), EngineE
     Ok(())
 }
 
-// Function to return the scale and min for a sub block, within a superblock
+/// Scale and min for a Q4_K sub-block inside a superblock.
 pub fn extract_scale_min_k4(j: usize, scales: &[u8]) -> (u8, u8) {
     if j < 4 {
         let scale = scales[j] & 0x3F;

@@ -1,6 +1,7 @@
 use crate::EngineError;
 use crate::layers::attention::{KVCache, kv_caches_for_config};
 use crate::loaded_model::LoadedModel;
+use crate::model_weights::ModelWeights;
 use crate::prefill::{
     PrefillState, prefill_from_tokens_loaded, prefill_state_for_single_token_loaded,
 };
@@ -11,14 +12,29 @@ use crate::runtime::{decode_forward, final_logits_last_token, prefill_forward};
 /// A session owns KV caches. The model owns immutable tensor storage and metadata.
 pub struct InferenceSession<'a> {
     model: &'a LoadedModel,
+    weights: ModelWeights<'a>,
     kv_caches: Vec<KVCache>,
 }
 
 impl<'a> InferenceSession<'a> {
-    pub fn new(model: &'a LoadedModel) -> Self {
+    pub fn new(model: &'a LoadedModel) -> Result<Self, EngineError> {
+        let weights = model.weights()?;
+        Ok(Self {
+            model,
+            weights,
+            kv_caches: kv_caches_for_config(model.config()),
+        })
+    }
+
+    pub fn from_parts(
+        model: &'a LoadedModel,
+        weights: ModelWeights<'a>,
+        kv_caches: Vec<KVCache>,
+    ) -> Self {
         Self {
             model,
-            kv_caches: kv_caches_for_config(model.config()),
+            weights,
+            kv_caches,
         }
     }
 
@@ -28,11 +44,14 @@ impl<'a> InferenceSession<'a> {
 
     pub fn prefill(&mut self, token_ids: &[u32]) -> Result<PrefillState, EngineError> {
         let input = prefill_from_tokens_loaded(self.model.gguf(), self.model.config(), token_ids)?;
-        let weights = self.model.weights()?;
+        self.prefill_prepared(&input)
+    }
+
+    pub fn prefill_prepared(&mut self, input: &PrefillState) -> Result<PrefillState, EngineError> {
         prefill_forward(
-            &input,
+            input,
             self.model.config(),
-            &weights,
+            &self.weights,
             self.kv_caches.as_mut_slice(),
         )
     }
@@ -43,17 +62,15 @@ impl<'a> InferenceSession<'a> {
             self.model.config(),
             token_id,
         )?;
-        let weights = self.model.weights()?;
         decode_forward(
             &input,
             self.model.config(),
-            &weights,
+            &self.weights,
             self.kv_caches.as_mut_slice(),
         )
     }
 
     pub fn logits_last_token(&self, state: &PrefillState) -> Result<Vec<f32>, EngineError> {
-        let weights = self.model.weights()?;
-        final_logits_last_token(state, self.model.config(), &weights)
+        final_logits_last_token(state, self.model.config(), &self.weights)
     }
 }

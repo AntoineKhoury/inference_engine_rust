@@ -49,6 +49,22 @@ impl LoadedModel {
         })
     }
 
+    pub(crate) fn from_loaded_parts(
+        model_path: String,
+        gguf: GGUFData,
+        config: ModelConfig,
+        names: ModelWeightNames,
+        tokenizer_prompt: TokenizerPromptConfig,
+    ) -> Self {
+        Self {
+            model_path,
+            gguf,
+            config,
+            names,
+            tokenizer_prompt,
+        }
+    }
+
     pub fn model_path(&self) -> &str {
         &self.model_path
     }

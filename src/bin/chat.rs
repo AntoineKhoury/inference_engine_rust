@@ -127,7 +127,7 @@ fn main() -> Result<(), EngineError> {
         );
         std::io::stderr().flush().ok();
 
-        let mut session = InferenceSession::new(&model);
+        let mut session = InferenceSession::new(&model)?;
         let mut state = session.prefill(&prompt_ids)?;
 
         let stream = !args.no_stream;

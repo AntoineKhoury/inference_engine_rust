@@ -16,13 +16,12 @@ use serde::Serialize;
 
 use crate::EngineError;
 use crate::layers::attention::kv_caches_for_config;
+use crate::loaded_model::LoadedModel;
 use crate::model_config::{ModelConfig, TokenizerPromptConfig};
 use crate::model_loader::file_loader::read_file;
-use crate::model_loader::gguf_types::GGUFData;
-use crate::model_weights::{ModelWeightNames, ModelWeights};
-use crate::prefill::{prefill_from_tokens, prefill_state_for_single_token_loaded};
-use crate::runtime::{decode_forward, final_logits_last_token, prefill_forward};
-use crate::sampling::sample_greedy;
+use crate::model_weights::ModelWeightNames;
+use crate::prefill::prefill_from_tokens_loaded;
+use crate::session::InferenceSession;
 use crate::tokenizer::Tokenizer;
 
 /// Default prompt (matches `tests/generate_smoke.rs`).
@@ -86,12 +85,8 @@ pub struct AllMetrics {
 
 /// Loaded model + tokenizer for warm benchmarks (`interactive-ttft`, `decode-throughput`, or after [`run_cold_start`]).
 pub struct EngineBench {
-    model_path: String,
-    gguf: GGUFData,
-    names: ModelWeightNames,
+    model: LoadedModel,
     tokenizer: Tokenizer,
-    tok_prompt: TokenizerPromptConfig,
-    config: ModelConfig,
 }
 
 impl EngineBench {
@@ -110,26 +105,10 @@ impl EngineBench {
             )));
         }
 
-        let model_path = model
-            .to_str()
-            .ok_or_else(|| EngineError::Model("model path is not valid UTF-8".into()))?
-            .to_string();
-
-        let mut gguf = read_file(model_path.as_str())?;
+        let model = LoadedModel::load(model)?;
         let tokenizer = Tokenizer::load_from_file(tokenizer_path)?;
-        let tok_prompt = TokenizerPromptConfig::from_gguf(&gguf)?;
-        let config = ModelConfig::from_gguf(&gguf)?;
-        let names = ModelWeightNames::resolve(&gguf, &config)?;
-        names.load_all(&mut gguf, model_path.as_str())?;
 
-        Ok(Self {
-            model_path,
-            gguf,
-            names,
-            tokenizer,
-            tok_prompt,
-            config,
-        })
+        Ok(Self { model, tokenizer })
     }
 
     /// Strict interactive: fresh KV; time tokenizer, prefill prep, prompt eval, LM head + sample.
@@ -140,28 +119,24 @@ impl EngineBench {
         let t_enc0 = Instant::now();
         let prompt_ids = self
             .tokenizer
-            .encode_with_prompt_config(prompt, &self.tok_prompt)?;
+            .encode_with_prompt_config(prompt, self.model.tokenizer_prompt())?;
         let tokenizer_encode_ms = ms(t_enc0.elapsed());
 
         let t_in0 = Instant::now();
-        let prefill_in = prefill_from_tokens(
-            &mut self.gguf,
-            self.model_path.as_str(),
-            &self.config,
-            &prompt_ids,
-        )?;
+        let prefill_in =
+            prefill_from_tokens_loaded(self.model.gguf(), self.model.config(), &prompt_ids)?;
         let prefill_prepare_ms = ms(t_in0.elapsed());
 
-        let weights = ModelWeights::from_loaded(&self.gguf, &self.names)?;
+        let weights = self.model.weights()?;
 
         let t_pf0 = Instant::now();
-        let mut kv_caches = kv_caches_for_config(&self.config);
-        let state = prefill_forward(&prefill_in, &self.config, &weights, &mut kv_caches)?;
+        let kv_caches = kv_caches_for_config(self.model.config());
+        let mut session = InferenceSession::from_parts(&self.model, weights, kv_caches);
+        let state = session.prefill_prepared(&prefill_in)?;
         let prompt_eval_ms = ms(t_pf0.elapsed());
 
         let t_tok0 = Instant::now();
-        let logits = final_logits_last_token(&state, &self.config, &weights)?;
-        let _first_id = sample_greedy(&logits)?;
+        let _first_id = crate::generation::greedy_next_token(&session, &state)?;
         let lm_head_sample_ms = ms(t_tok0.elapsed());
 
         let ttft_infer_ms = prefill_prepare_ms + prompt_eval_ms + lm_head_sample_ms;
@@ -193,26 +168,17 @@ impl EngineBench {
 
         let prompt_ids = self
             .tokenizer
-            .encode_with_prompt_config(prompt, &self.tok_prompt)?;
+            .encode_with_prompt_config(prompt, self.model.tokenizer_prompt())?;
 
         let t_setup0 = Instant::now();
-        let prefill_in = prefill_from_tokens(
-            &mut self.gguf,
-            self.model_path.as_str(),
-            &self.config,
-            &prompt_ids,
-        )?;
-        let weights = ModelWeights::from_loaded(&self.gguf, &self.names)?;
-        let mut kv_caches = kv_caches_for_config(&self.config);
-        let mut state = prefill_forward(&prefill_in, &self.config, &weights, &mut kv_caches)?;
+        let mut session = InferenceSession::new(&self.model)?;
+        let mut state = session.prefill(&prompt_ids)?;
         let warm_prefill_ms = ms(t_setup0.elapsed());
 
         let t_dec0 = Instant::now();
         for _ in 0..decode_tokens {
-            let logits = final_logits_last_token(&state, &self.config, &weights)?;
-            let next_id = sample_greedy(&logits)?;
-            let step_in = prefill_state_for_single_token_loaded(&self.gguf, &self.config, next_id)?;
-            state = decode_forward(&step_in, &self.config, &weights, &mut kv_caches)?;
+            let next_id = crate::generation::greedy_next_token(&session, &state)?;
+            state = session.decode_token(next_id)?;
         }
         let decode_elapsed_ms = ms(t_dec0.elapsed());
 
@@ -279,37 +245,37 @@ pub fn run_cold_start(
     names.load_all(&mut gguf, model_path.as_str())?;
     let tensor_load_ms = ms(t0.elapsed());
 
+    let model = LoadedModel::from_loaded_parts(model_path, gguf, config, names, tok_prompt);
+
     let t0 = Instant::now();
-    let prefill_in = prefill_from_tokens(&mut gguf, model_path.as_str(), &config, &prompt_ids)?;
+    let prefill_in = prefill_from_tokens_loaded(model.gguf(), model.config(), &prompt_ids)?;
     let prefill_prepare_ms = ms(t0.elapsed());
 
     let t0 = Instant::now();
-    let weights = ModelWeights::from_loaded(&gguf, &names)?;
+    let weights = model.weights()?;
     let weights_build_ms = ms(t0.elapsed());
 
     let t0 = Instant::now();
-    let mut kv_caches = kv_caches_for_config(&config);
+    let kv_caches = kv_caches_for_config(model.config());
     let kv_alloc_ms = ms(t0.elapsed());
 
-    let t0 = Instant::now();
-    let state = prefill_forward(&prefill_in, &config, &weights, &mut kv_caches)?;
-    let prompt_eval_ms = ms(t0.elapsed());
+    let (prompt_eval_ms, lm_head_sample_ms) = {
+        let mut session = InferenceSession::from_parts(&model, weights, kv_caches);
 
-    let t0 = Instant::now();
-    let logits = final_logits_last_token(&state, &config, &weights)?;
-    let _first_id = sample_greedy(&logits)?;
-    let lm_head_sample_ms = ms(t0.elapsed());
+        let t0 = Instant::now();
+        let state = session.prefill_prepared(&prefill_in)?;
+        let prompt_eval_ms = ms(t0.elapsed());
+
+        let t0 = Instant::now();
+        let _first_id = crate::generation::greedy_next_token(&session, &state)?;
+        let lm_head_sample_ms = ms(t0.elapsed());
+
+        (prompt_eval_ms, lm_head_sample_ms)
+    };
 
     let cold_ttft_ms = ms(wall0.elapsed());
 
-    let bench = EngineBench {
-        model_path,
-        gguf,
-        names,
-        tokenizer,
-        tok_prompt,
-        config,
-    };
+    let bench = EngineBench { model, tokenizer };
 
     let metrics = ColdStartMetrics {
         prompt_token_count,
