@@ -17,13 +17,16 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use inference_engine_rust::EngineError;
 use inference_engine_rust::bench_metrics::{
-    run_all, run_cold_start, run_llama_completion_ttft_ref, ColdStartMetrics, DecodeThroughputMetrics,
-    EngineBench, InteractiveTtftMetrics, LlamaCompletionTtftRef, DEFAULT_BENCH_PROMPT,
+    ColdStartMetrics, DEFAULT_BENCH_PROMPT, DecodeThroughputMetrics, EngineBench,
+    InteractiveTtftMetrics, LlamaCompletionTtftRef, run_all, run_cold_start,
+    run_llama_completion_ttft_ref,
 };
 
 #[derive(Parser, Debug)]
 #[command(name = "bench_compare")]
-#[command(about = "Latency/throughput metrics for the inference engine (vs llama-bench-style comparisons)")]
+#[command(
+    about = "Latency/throughput metrics for the inference engine (vs llama-bench-style comparisons)"
+)]
 struct Cli {
     /// GGUF model path
     #[arg(
@@ -94,16 +97,17 @@ fn check_cold(m: &ColdStartMetrics) -> Result<(), EngineError> {
     finite_pos_ms(m.cold_ttft_ms, "cold.cold_ttft_ms")?;
     finite_pos_ms(m.lm_head_sample_ms, "cold.lm_head_sample_ms")?;
     if m.prompt_token_count == 0 {
-        return Err(EngineError::Model(
-            "cold.prompt_token_count is zero".into(),
-        ));
+        return Err(EngineError::Model("cold.prompt_token_count is zero".into()));
     }
     Ok(())
 }
 
 fn check_interactive(m: &InteractiveTtftMetrics) -> Result<(), EngineError> {
     finite_pos_ms(m.ttft_infer_ms, "interactive.ttft_infer_ms")?;
-    finite_pos_ms(m.ttft_with_tokenizer_ms, "interactive.ttft_with_tokenizer_ms")?;
+    finite_pos_ms(
+        m.ttft_with_tokenizer_ms,
+        "interactive.ttft_with_tokenizer_ms",
+    )?;
     if m.prompt_token_count == 0 {
         return Err(EngineError::Model(
             "interactive.prompt_token_count is zero".into(),
@@ -112,10 +116,7 @@ fn check_interactive(m: &InteractiveTtftMetrics) -> Result<(), EngineError> {
     Ok(())
 }
 
-fn check_decode(
-    m: &DecodeThroughputMetrics,
-    min_tps: Option<f64>,
-) -> Result<(), EngineError> {
+fn check_decode(m: &DecodeThroughputMetrics, min_tps: Option<f64>) -> Result<(), EngineError> {
     finite_pos_ms(m.decode_elapsed_ms, "decode.decode_elapsed_ms")?;
     if !m.decode_tokens_per_sec.is_finite() {
         return Err(EngineError::Model(
@@ -147,7 +148,10 @@ fn print_cold_human(m: &ColdStartMetrics) {
     println!("  prefill_prepare_ms: {:.3}", m.prefill_prepare_ms);
     println!("  weights_build_ms:   {:.3}", m.weights_build_ms);
     println!("  kv_alloc_ms:        {:.3}", m.kv_alloc_ms);
-    println!("  prompt_eval_ms:     {:.3}  (llama: prompt eval time)", m.prompt_eval_ms);
+    println!(
+        "  prompt_eval_ms:     {:.3}  (llama: prompt eval time)",
+        m.prompt_eval_ms
+    );
     println!(
         "  lm_head_sample_ms:  {:.3}  (output norm + LM head + argmax; not full decode)",
         m.lm_head_sample_ms
@@ -172,10 +176,15 @@ fn print_interactive_human(m: &InteractiveTtftMetrics, llama: Option<&LlamaCompl
         "  ttft_infer_ms:             {:.3}  (prepare + prompt_eval + lm_head_sample; no tokenizer)",
         m.ttft_infer_ms
     );
-    println!("  ttft_with_tokenizer_ms:    {:.3}", m.ttft_with_tokenizer_ms);
+    println!(
+        "  ttft_with_tokenizer_ms:    {:.3}",
+        m.ttft_with_tokenizer_ms
+    );
     if let Some(l) = llama {
         println!();
-        println!("=== llama-completion --perf (reference, CPU-fair: -ngl 0, --device none, --no-op-offload, -t 1) ===");
+        println!(
+            "=== llama-completion --perf (reference, CPU-fair: -ngl 0, --device none, --no-op-offload, -t 1) ==="
+        );
         println!("  load_ms (model): {:.3}", l.load_ms);
         println!("  prompt_eval_ms:            {:.3}", l.prompt_eval_ms);
         println!("  prompt_token_count:        {}", l.prompt_tokens);
@@ -207,7 +216,9 @@ fn main() -> Result<(), EngineError> {
     let cli = Cli::parse();
 
     if cli.compare_llama && !matches!(cli.command, Commands::InteractiveTtft) {
-        eprintln!("warning: --compare-llama only runs with the interactive-ttft subcommand; ignoring");
+        eprintln!(
+            "warning: --compare-llama only runs with the interactive-ttft subcommand; ignoring"
+        );
     }
 
     match cli.command {
@@ -228,7 +239,7 @@ fn main() -> Result<(), EngineError> {
                     })
                 );
             } else {
-                               print_cold_human(&m.cold);
+                print_cold_human(&m.cold);
                 println!();
                 print_interactive_human(&m.interactive, None);
                 println!();
@@ -270,9 +281,7 @@ fn main() -> Result<(), EngineError> {
                 None
             };
             if cli.json {
-                let ratio = llama
-                    .as_ref()
-                    .map(|l| m.ttft_infer_ms / l.prompt_eval_ms);
+                let ratio = llama.as_ref().map(|l| m.ttft_infer_ms / l.prompt_eval_ms);
                 println!(
                     "{}",
                     serde_json::json!({

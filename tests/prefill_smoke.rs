@@ -8,10 +8,8 @@ use inference_engine_rust::model_loader::file_loader::read_file;
 use inference_engine_rust::model_weights::{ModelWeightNames, ModelWeights};
 
 use inference_engine_rust::layers::embeddings::lookup_embeddings;
-use inference_engine_rust::prefill::{
-    decode_forward, final_logits_last_token, prefill_forward, prefill_from_tokens,
-    prefill_state_for_single_token_loaded,
-};
+use inference_engine_rust::prefill::{prefill_from_tokens, prefill_state_for_single_token_loaded};
+use inference_engine_rust::runtime::{decode_forward, final_logits_last_token, prefill_forward};
 
 const MODEL_PATH: &str = common::REFERENCE_MODEL_REL_PATH;
 
@@ -25,9 +23,7 @@ fn embedding_lookup_matches_whether_embd_loaded_alone_or_with_all_weights() {
     let mut g2 = read_file(MODEL_PATH).expect("read gguf");
     let config = ModelConfig::from_gguf(&g2).expect("config");
     let names = ModelWeightNames::resolve(&g2, &config).expect("resolve names");
-    names
-        .load_all(&mut g2, MODEL_PATH)
-        .expect("load all");
+    names.load_all(&mut g2, MODEL_PATH).expect("load all");
     let e2 = lookup_embeddings(&mut g2, MODEL_PATH, &[1u32]).expect("lookup2");
 
     assert_eq!(e1[0].len(), e2[0].len());
@@ -36,10 +32,7 @@ fn embedding_lookup_matches_whether_embd_loaded_alone_or_with_all_weights() {
         .zip(e2[0].iter())
         .map(|(a, b)| (a - b).abs())
         .fold(0.0f32, f32::max);
-    assert!(
-        max_delta < 1e-4,
-        "lookup differs: max_delta={max_delta}"
-    );
+    assert!(max_delta < 1e-4, "lookup differs: max_delta={max_delta}");
 }
 
 #[test]
@@ -56,9 +49,7 @@ fn token_embd_buffer_matches_single_tensor_load() {
     let mut g2 = read_file(MODEL_PATH).expect("read gguf");
     let config = ModelConfig::from_gguf(&g2).expect("config");
     let names = ModelWeightNames::resolve(&g2, &config).expect("resolve names");
-    names
-        .load_all(&mut g2, MODEL_PATH)
-        .expect("load all");
+    names.load_all(&mut g2, MODEL_PATH).expect("load all");
     let b2 = g2
         .get_tensor("token_embd.weight")
         .expect("embd")
@@ -70,11 +61,7 @@ fn token_embd_buffer_matches_single_tensor_load() {
         b2.len(),
         "token_embd byte length differs between load paths"
     );
-    let mismatches = b1
-        .iter()
-        .zip(b2.iter())
-        .filter(|(a, b)| a != b)
-        .count();
+    let mismatches = b1.iter().zip(b2.iter()).filter(|(a, b)| a != b).count();
     assert_eq!(
         mismatches, 0,
         "token_embd buffer differs in {mismatches} bytes between single and load_all"
@@ -131,7 +118,8 @@ fn prefill_two_tokens_matches_prefill_one_then_decode() {
     let logits_b = {
         let mut kv_b = kv_caches_for_config(&config);
         let input_b = prefill_from_tokens(&mut gguf, MODEL_PATH, &config, &[t0]).expect("embed1");
-        let decode_in = prefill_state_for_single_token_loaded(&gguf, &config, t1).expect("decode state");
+        let decode_in =
+            prefill_state_for_single_token_loaded(&gguf, &config, t1).expect("decode state");
         let weights = ModelWeights::from_loaded(&gguf, &names).expect("model weights");
         let _out_b = prefill_forward(&input_b, &config, &weights, &mut kv_b).expect("prefill1");
         let out_dec = decode_forward(&decode_in, &config, &weights, &mut kv_b).expect("decode");

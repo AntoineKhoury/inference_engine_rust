@@ -39,15 +39,13 @@ pub fn argmax_index(logits: &[f32]) -> Option<usize> {
 
 /// Greedy choice: token id = argmax over logits.
 pub fn sample_greedy(logits: &[f32]) -> Result<u32, SamplingError> {
-    argmax_index(logits)
-        .map(|i| i as u32)
-        .ok_or({
-            if logits.is_empty() {
-                SamplingError::EmptyLogits
-            } else {
-                SamplingError::InvalidLogits
-            }
-        })
+    argmax_index(logits).map(|i| i as u32).ok_or({
+        if logits.is_empty() {
+            SamplingError::EmptyLogits
+        } else {
+            SamplingError::InvalidLogits
+        }
+    })
 }
 
 /// Stochastic choice: softmax(logits / `temperature`) then sample one index with `rng`.
@@ -83,8 +81,8 @@ pub fn sample_temperature<R: Rng + ?Sized>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::rngs::StdRng;
     use rand::SeedableRng;
+    use rand::rngs::StdRng;
 
     #[test]
     fn argmax_picks_largest() {

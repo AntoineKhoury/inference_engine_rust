@@ -14,7 +14,11 @@ pub fn f16_to_f32(bits: u16) -> f32 {
         }
     } else if exponent == 0x1F {
         if mantissa == 0 {
-            if sign == 0 { f32::INFINITY } else { f32::NEG_INFINITY }
+            if sign == 0 {
+                f32::INFINITY
+            } else {
+                f32::NEG_INFINITY
+            }
         } else {
             f32::NAN
         }

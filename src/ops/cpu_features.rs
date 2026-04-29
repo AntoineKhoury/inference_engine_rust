@@ -29,7 +29,7 @@ pub struct CpuFeatures {
     ///
     /// Required for efficient quantized matmul operations.
     pub neon: bool,
-    
+
     /// ARMv8.2+ Dot Product instructions (optional)
     /// Provides specialized instructions for integer dot products
     /// Useful for quantized operations but not strictly required
@@ -39,7 +39,7 @@ pub struct CpuFeatures {
 impl CpuFeatures {
     /// Detect CPU features at runtime
     /// This should be called once at startup and the result cached
-    /// 
+    ///
     /// # Safety
     /// This function is safe - it only queries CPU capabilities, it doesn't
     /// execute any SIMD instructions that might not be supported.
@@ -50,19 +50,19 @@ impl CpuFeatures {
             // However, we still check for it to be defensive
             let neon = is_aarch64_feature_detected!("neon");
             let dotprod = is_aarch64_feature_detected!("dotprod");
-            
+
             Self { neon, dotprod }
         }
-        
+
         #[cfg(target_arch = "arm")]
         {
             // On ARMv7, NEON is optional (some chips don't have it)
             let neon = is_arm_feature_detected!("neon");
             let dotprod = false; // Dot product requires ARMv8.2+
-            
+
             Self { neon, dotprod }
         }
-        
+
         #[cfg(not(any(target_arch = "aarch64", target_arch = "arm")))]
         {
             // Fallback for non-ARM architectures (x86_64, etc.)
@@ -73,24 +73,24 @@ impl CpuFeatures {
             }
         }
     }
-    
+
     /// Check if SIMD-optimized kernels can be used
     /// Returns true if at least NEON is available
     pub fn has_simd(&self) -> bool {
         self.neon
     }
-    
+
     /// Get a human-readable description of detected features
     pub fn describe(&self) -> String {
         let mut features = Vec::new();
-        
+
         if self.neon {
             features.push("NEON");
         }
         if self.dotprod {
             features.push("DOTPROD");
         }
-        
+
         if features.is_empty() {
             "None (scalar fallback)".to_string()
         } else {
@@ -102,7 +102,7 @@ impl CpuFeatures {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_cpu_features_detection() {
         let features = CpuFeatures::detect();
@@ -110,7 +110,7 @@ mod tests {
         // This test verifies the detection doesn't panic
         let _ = features.describe();
     }
-    
+
     #[test]
     fn test_cpu_features_describe() {
         let features = CpuFeatures {
@@ -119,7 +119,7 @@ mod tests {
         };
         let desc = features.describe();
         assert!(desc.contains("NEON"));
-        
+
         let features = CpuFeatures {
             neon: false,
             dotprod: false,
@@ -128,4 +128,3 @@ mod tests {
         assert!(desc.contains("None"));
     }
 }
-

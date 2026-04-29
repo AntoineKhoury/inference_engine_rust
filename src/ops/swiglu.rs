@@ -1,12 +1,9 @@
 use crate::EngineError;
 
-pub fn sigmoid(
-    input: &[f32],
-    output: &mut [f32]
-) -> Result<(), EngineError> {
+pub fn sigmoid(input: &[f32], output: &mut [f32]) -> Result<(), EngineError> {
     #[cfg(debug_assertions)]
     debug_assert_eq!(input.len(), output.len(), "Dimension mismatch for sigmoid");
-    
+
     for i in 0..input.len() {
         let x = input[i];
         // Numerically stable sigmoid: 1 / (1 + exp(-x))
@@ -24,11 +21,7 @@ pub fn sigmoid(
 
 /// Llama/Mistral FFN gated activation: **SiLU(gate) × up** (same as `silu(gate) * up` in HF / llama.cpp).
 /// `gate` is the gate projection row; `up` is the up projection row (same length).
-pub fn swiglu(
-    gate: &[f32],
-    up: &[f32],
-    output: &mut [f32],
-) -> Result<(), EngineError> {
+pub fn swiglu(gate: &[f32], up: &[f32], output: &mut [f32]) -> Result<(), EngineError> {
     #[cfg(debug_assertions)]
     debug_assert_eq!(gate.len(), up.len(), "Dimension mismatch for SwiGLU");
 

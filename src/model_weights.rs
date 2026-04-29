@@ -52,10 +52,7 @@ pub struct ModelWeights<'a> {
 }
 
 impl<'a> ModelWeights<'a> {
-    pub fn from_loaded(
-        gguf: &'a GGUFData,
-        names: &ModelWeightNames,
-    ) -> Result<Self, EngineError> {
+    pub fn from_loaded(gguf: &'a GGUFData, names: &ModelWeightNames) -> Result<Self, EngineError> {
         let mut layers = Vec::with_capacity(names.layers.len());
         for layer in &names.layers {
             layers.push(LayerWeights {
@@ -175,10 +172,7 @@ pub struct ModelWeightNames {
 }
 
 impl ModelWeightNames {
-    pub fn resolve(
-        gguf: &GGUFData,
-        config: &ModelConfig,
-    ) -> Result<Self, EngineError> {
+    pub fn resolve(gguf: &GGUFData, config: &ModelConfig) -> Result<Self, EngineError> {
         let available = available_tensor_names(gguf);
 
         let token_embeddings = resolve_name_from_strs(
@@ -225,13 +219,7 @@ impl ModelWeightNames {
                                 )?),
                             )
                         } else {
-                            (
-                                attn_post_norm,
-                                ffn_post_norm,
-                                None,
-                                None,
-                                None,
-                            )
+                            (attn_post_norm, ffn_post_norm, None, None, None)
                         }
                     }
                     ModelFamily::MistralLlama => (None, None, None, None, None),
@@ -255,15 +243,24 @@ impl ModelWeightNames {
                 ffn_post_norm,
                 wq: resolve_name_from_strings(
                     &available,
-                    &[format!("{prefix}attn_q.weight"), format!("{prefix}wq.weight")],
+                    &[
+                        format!("{prefix}attn_q.weight"),
+                        format!("{prefix}wq.weight"),
+                    ],
                 )?,
                 wk: resolve_name_from_strings(
                     &available,
-                    &[format!("{prefix}attn_k.weight"), format!("{prefix}wk.weight")],
+                    &[
+                        format!("{prefix}attn_k.weight"),
+                        format!("{prefix}wk.weight"),
+                    ],
                 )?,
                 wv: resolve_name_from_strings(
                     &available,
-                    &[format!("{prefix}attn_v.weight"), format!("{prefix}wv.weight")],
+                    &[
+                        format!("{prefix}attn_v.weight"),
+                        format!("{prefix}wv.weight"),
+                    ],
                 )?,
                 wo: resolve_name_from_strings(
                     &available,
@@ -274,15 +271,24 @@ impl ModelWeightNames {
                 )?,
                 w_gate: resolve_name_from_strings(
                     &available,
-                    &[format!("{prefix}ffn_gate.weight"), format!("{prefix}w1.weight")],
+                    &[
+                        format!("{prefix}ffn_gate.weight"),
+                        format!("{prefix}w1.weight"),
+                    ],
                 )?,
                 w_up: resolve_name_from_strings(
                     &available,
-                    &[format!("{prefix}ffn_up.weight"), format!("{prefix}w3.weight")],
+                    &[
+                        format!("{prefix}ffn_up.weight"),
+                        format!("{prefix}w3.weight"),
+                    ],
                 )?,
                 w_down: resolve_name_from_strings(
                     &available,
-                    &[format!("{prefix}ffn_down.weight"), format!("{prefix}w2.weight")],
+                    &[
+                        format!("{prefix}ffn_down.weight"),
+                        format!("{prefix}w2.weight"),
+                    ],
                 )?,
                 attn_q_norm: optional_name_from_strings(
                     &available,
@@ -309,25 +315,25 @@ impl ModelWeightNames {
             });
         }
 
-        let gemma4_ple = if config.family == ModelFamily::Gemma4 && config.embedding_length_per_layer > 0
-        {
-            Some(Gemma4PleNames {
-                per_layer_token_embd: resolve_name_from_strs(
-                    &available,
-                    &["per_layer_token_embd.weight"],
-                )?,
-                per_layer_model_proj: resolve_name_from_strs(
-                    &available,
-                    &["per_layer_model_proj.weight"],
-                )?,
-                per_layer_proj_norm: resolve_name_from_strs(
-                    &available,
-                    &["per_layer_proj_norm.weight"],
-                )?,
-            })
-        } else {
-            None
-        };
+        let gemma4_ple =
+            if config.family == ModelFamily::Gemma4 && config.embedding_length_per_layer > 0 {
+                Some(Gemma4PleNames {
+                    per_layer_token_embd: resolve_name_from_strs(
+                        &available,
+                        &["per_layer_token_embd.weight"],
+                    )?,
+                    per_layer_model_proj: resolve_name_from_strs(
+                        &available,
+                        &["per_layer_model_proj.weight"],
+                    )?,
+                    per_layer_proj_norm: resolve_name_from_strs(
+                        &available,
+                        &["per_layer_proj_norm.weight"],
+                    )?,
+                })
+            } else {
+                None
+            };
 
         Ok(Self {
             token_embeddings,
@@ -338,11 +344,7 @@ impl ModelWeightNames {
         })
     }
 
-    pub fn load_all(
-        &self,
-        gguf: &mut GGUFData,
-        file_path: &str,
-    ) -> Result<(), EngineError> {
+    pub fn load_all(&self, gguf: &mut GGUFData, file_path: &str) -> Result<(), EngineError> {
         let mut names_to_load = Vec::new();
         names_to_load.push(self.token_embeddings.clone());
         names_to_load.push(self.output_norm.clone());
@@ -430,7 +432,10 @@ fn resolve_lm_head(available: &HashSet<String>) -> Result<String, EngineError> {
     ))
 }
 
-fn optional_name_from_strings(available: &HashSet<String>, candidates: &[String]) -> Option<String> {
+fn optional_name_from_strings(
+    available: &HashSet<String>,
+    candidates: &[String],
+) -> Option<String> {
     for candidate in candidates {
         if available.contains(candidate) {
             return Some(candidate.clone());
@@ -453,11 +458,7 @@ fn resolve_name_from_strings(
     )))
 }
 
-fn get_loaded<'a>(
-    gguf: &'a GGUFData,
-    name: &str,
-) -> Result<&'a Tensor, EngineError> {
-    gguf.get_tensor(name).ok_or_else(|| {
-        EngineError::Model(format!("tensor '{name}' not found after loading"))
-    })
+fn get_loaded<'a>(gguf: &'a GGUFData, name: &str) -> Result<&'a Tensor, EngineError> {
+    gguf.get_tensor(name)
+        .ok_or_else(|| EngineError::Model(format!("tensor '{name}' not found after loading")))
 }

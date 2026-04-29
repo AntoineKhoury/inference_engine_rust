@@ -1,9 +1,6 @@
 use crate::EngineError;
 
-pub fn softmax(
-    input: &[f32],
-    output: &mut [f32]
-) -> Result<(), EngineError> {
+pub fn softmax(input: &[f32], output: &mut [f32]) -> Result<(), EngineError> {
     #[cfg(debug_assertions)]
     debug_assert_eq!(input.len(), output.len(), "Dimenssion mismatch at softmax");
 
@@ -30,7 +27,6 @@ pub fn softmax(
     Ok(())
 }
 
-
 #[cfg(test)]
 mod test {
     use super::softmax;
@@ -43,7 +39,10 @@ mod test {
         softmax(&input, &mut output).unwrap();
 
         let sum: f32 = output.iter().sum();
-        assert!((sum - 1.0).abs() < 1e-5, "Softmax outputs should sum to 1.0");
+        assert!(
+            (sum - 1.0).abs() < 1e-5,
+            "Softmax outputs should sum to 1.0"
+        );
 
         assert!((output[0] - 0.268_941_4).abs() < 1e-5);
         assert!((output[1] - 0.731_058_6).abs() < 1e-5);

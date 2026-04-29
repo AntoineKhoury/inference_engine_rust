@@ -141,15 +141,22 @@ pub struct ModelConfig {
 
 impl ModelConfig {
     pub fn from_gguf(gguf: &GGUFData) -> Result<Self, EngineError> {
-        let context_length = get_usize_alt(gguf, &["llama.context_length", "gemma4.context_length"])?;
-        let hidden_dim = get_usize_alt(gguf, &["llama.embedding_length", "gemma4.embedding_length"])?;
+        let context_length =
+            get_usize_alt(gguf, &["llama.context_length", "gemma4.context_length"])?;
+        let hidden_dim =
+            get_usize_alt(gguf, &["llama.embedding_length", "gemma4.embedding_length"])?;
         let n_layers = get_usize_alt(gguf, &["llama.block_count", "gemma4.block_count"])?;
-        let n_heads = get_usize_alt(gguf, &["llama.attention.head_count", "gemma4.attention.head_count"])?;
+        let n_heads = get_usize_alt(
+            gguf,
+            &["llama.attention.head_count", "gemma4.attention.head_count"],
+        )?;
         let n_kv_heads = get_usize_opt(gguf, "llama.attention.head_count_kv")
             .or_else(|| get_usize_opt(gguf, "gemma4.attention.head_count_kv"))
             .unwrap_or(n_heads);
-        let ffn_dim_meta =
-            get_usize_alt(gguf, &["llama.feed_forward_length", "gemma4.feed_forward_length"])?;
+        let ffn_dim_meta = get_usize_alt(
+            gguf,
+            &["llama.feed_forward_length", "gemma4.feed_forward_length"],
+        )?;
         let rope_theta = get_f32_opt(gguf, "llama.rope.theta")
             .or_else(|| get_f32_opt(gguf, "gemma4.rope.freq_base"))
             .unwrap_or(10000.0);
@@ -201,8 +208,7 @@ impl ModelConfig {
         let family = detect_model_family(gguf);
         let general_name = get_string(gguf, "general.name").unwrap_or_default();
         let lower = general_name.to_ascii_lowercase();
-        let mistral_style_gguf =
-            lower.contains("mistral") || lower.contains("gemma");
+        let mistral_style_gguf = lower.contains("mistral") || lower.contains("gemma");
         let unpack_llama_gguf_qk = match std::env::var("INFERENCE_ENGINE_GGUF_QK_UNPACK") {
             Ok(v) if v == "1" || v.eq_ignore_ascii_case("true") => true,
             Ok(v) if v == "0" || v.eq_ignore_ascii_case("false") => false,
@@ -272,8 +278,8 @@ impl ModelConfig {
             ModelFamily::MistralLlama => vec![None; n_layers],
         };
 
-        let final_logit_softcapping =
-            get_f32_opt(gguf, "gemma4.final_logit_softcapping").filter(|&x| x > 0.0 && x.is_finite());
+        let final_logit_softcapping = get_f32_opt(gguf, "gemma4.final_logit_softcapping")
+            .filter(|&x| x > 0.0 && x.is_finite());
 
         Ok(Self {
             family,
@@ -308,7 +314,10 @@ impl ModelConfig {
         })
     }
 
-    pub fn layer_attention_for(&self, layer_idx: usize) -> Result<&LayerAttentionSpec, EngineError> {
+    pub fn layer_attention_for(
+        &self,
+        layer_idx: usize,
+    ) -> Result<&LayerAttentionSpec, EngineError> {
         self.layer_attention.get(layer_idx).ok_or_else(|| {
             EngineError::Model(format!(
                 "layer_attention: index {layer_idx} out of range (n_layers = {})",
@@ -356,7 +365,7 @@ fn build_gemma4_kv_borrow_from(
         if out[layer_idx].is_none() {
             return Err(EngineError::Model(format!(
                 "Gemma 4: no KV-borrow source for layer {layer_idx} (match sliding/full in 0..{first_shared})"
-)));
+            )));
         }
     }
     Ok(out)
@@ -374,12 +383,12 @@ fn infer_layer_dims(
 ) -> Result<Vec<LayerDims>, EngineError> {
     match family {
         ModelFamily::MistralLlama => {
-            let q_dim = n_heads
-                .checked_mul(head_dim_uniform)
-                .ok_or_else(|| EngineError::Model("layer dims: n_heads * head_dim overflow".into()))?;
-            let kv_dim = n_kv_heads
-                .checked_mul(head_dim_uniform)
-                .ok_or_else(|| EngineError::Model("layer dims: n_kv_heads * head_dim overflow".into()))?;
+            let q_dim = n_heads.checked_mul(head_dim_uniform).ok_or_else(|| {
+                EngineError::Model("layer dims: n_heads * head_dim overflow".into())
+            })?;
+            let kv_dim = n_kv_heads.checked_mul(head_dim_uniform).ok_or_else(|| {
+                EngineError::Model("layer dims: n_kv_heads * head_dim overflow".into())
+            })?;
             Ok(vec![
                 LayerDims {
                     q_dim,
@@ -456,11 +465,17 @@ fn detect_model_family(gguf: &GGUFData) -> ModelFamily {
     let name = get_string(gguf, "general.name")
         .unwrap_or_default()
         .to_ascii_lowercase();
-    if arch.contains("gemma4") || arch.contains("gemma-4") || name.contains("gemma-4") || name.contains("gemma4")
+    if arch.contains("gemma4")
+        || arch.contains("gemma-4")
+        || name.contains("gemma-4")
+        || name.contains("gemma4")
     {
         return ModelFamily::Gemma4;
     }
-    if gguf.get_metadata("gemma4.attention.sliding_window_pattern").is_some() {
+    if gguf
+        .get_metadata("gemma4.attention.sliding_window_pattern")
+        .is_some()
+    {
         return ModelFamily::Gemma4;
     }
     ModelFamily::MistralLlama
@@ -561,10 +576,7 @@ fn build_gemma4_layer_attention(
     }
 
     // GGUF uses `gemma4.rope.dimension_count(_swa)`; clamp per layer to that layer's `head_dim`.
-    let default_hd = layer_dims
-        .first()
-        .map(|d| d.head_dim)
-        .unwrap_or(1);
+    let default_hd = layer_dims.first().map(|d| d.head_dim).unwrap_or(1);
     let rope_rotary_dim_local_meta = get_usize_opt(gguf, "gemma4.rope.dimension_count_swa")
         .or_else(|| get_usize_opt(gguf, "gemma4.attention.rotary_dim_local"))
         .or_else(|| get_usize_opt(gguf, "llama.rope.dimension_count"))

@@ -11,9 +11,9 @@ pub fn get_tensors_metadata<R: BufRead + Seek>(
 ) -> Result<Vec<TensorInfo>, EngineError> {
     let mut all_tensors: Vec<TensorInfo> = Vec::with_capacity(tensor_count as usize);
     let mut unique_types: HashSet<u32> = HashSet::new();
-    for _ in 0..tensor_count{
+    for _ in 0..tensor_count {
         let curr_tensor: TensorInfo = get_tensor_metadata(reader)?;
-        if !unique_types.contains(&curr_tensor.type_id){
+        if !unique_types.contains(&curr_tensor.type_id) {
             unique_types.insert(curr_tensor.type_id);
         }
         all_tensors.push(curr_tensor);
@@ -22,16 +22,24 @@ pub fn get_tensors_metadata<R: BufRead + Seek>(
     Ok(all_tensors)
 }
 
-pub fn get_tensor_metadata<R: BufRead + Seek>(reader: &mut Reader<R>) -> Result<TensorInfo, EngineError> {
+pub fn get_tensor_metadata<R: BufRead + Seek>(
+    reader: &mut Reader<R>,
+) -> Result<TensorInfo, EngineError> {
     let name = reader.read_string()?;
     let n_dimensions = reader.read_u32()? as usize;
     let mut dimensions = Vec::with_capacity(n_dimensions);
-    for _ in 0..n_dimensions{
+    for _ in 0..n_dimensions {
         dimensions.push(reader.read_u64()? as usize);
     }
     let type_id = reader.read_u32()?;
     let offset = reader.read_u64()? as usize;
-    Ok(TensorInfo { name, n_dimensions, dimensions, type_id, offset })
+    Ok(TensorInfo {
+        name,
+        n_dimensions,
+        dimensions,
+        type_id,
+        offset,
+    })
 }
 
 pub fn get_kv_metadata<R: BufRead + Seek>(
@@ -70,11 +78,9 @@ pub fn get_k<R: BufRead + Seek>(reader: &mut Reader<R>) -> Result<String, Engine
 pub fn get_value_type<R: BufRead + Seek>(reader: &mut Reader<R>) -> Result<DataType, EngineError> {
     // Value type is stored as 4 bytes
     let value_type_bytes = reader.read_bytes(4)?;
-    let code = u32::from_le_bytes(
-        value_type_bytes
-            .try_into()
-            .map_err(|v: Vec<u8>| EngineError::Gguf(format!("value type: expected 4 bytes, got {}", v.len())))?,
-    );
+    let code = u32::from_le_bytes(value_type_bytes.try_into().map_err(|v: Vec<u8>| {
+        EngineError::Gguf(format!("value type: expected 4 bytes, got {}", v.len()))
+    })?);
     let value_type: DataType = match code {
         0 => DataType::Uint8,
         1 => DataType::Int8,
@@ -107,17 +113,17 @@ impl ReadBytesAsType for ReadingInfo {
         reader: &mut Reader<R>,
     ) -> Result<Data, EngineError> {
         let data = match self.data_type {
-            DataType::Uint8  => Data::Uint8(reader.read_u8()?),
-            DataType::Int8   => Data::Int8(reader.read_i8()?),
+            DataType::Uint8 => Data::Uint8(reader.read_u8()?),
+            DataType::Int8 => Data::Int8(reader.read_i8()?),
             DataType::Uint16 => Data::Uint16(reader.read_u16()?),
-            DataType::Int16  => Data::Int16(reader.read_i16()?),
+            DataType::Int16 => Data::Int16(reader.read_i16()?),
             DataType::Uint32 => Data::Uint32(reader.read_u32()?),
-            DataType::Int32  => Data::Int32(reader.read_i32()?),
-            DataType::Float32=> Data::Float32(reader.read_f32()?),
-            DataType::Bool   => Data::Bool(reader.read_bool()?),
+            DataType::Int32 => Data::Int32(reader.read_i32()?),
+            DataType::Float32 => Data::Float32(reader.read_f32()?),
+            DataType::Bool => Data::Bool(reader.read_bool()?),
             DataType::Uint64 => Data::Uint64(reader.read_u64()?),
-            DataType::Int64  => Data::Int64(reader.read_i64()?),
-            DataType::Float64=> Data::Float64(reader.read_f64()?),
+            DataType::Int64 => Data::Int64(reader.read_i64()?),
+            DataType::Float64 => Data::Float64(reader.read_f64()?),
             DataType::String => Data::String(reader.read_string()?),
             DataType::Array => Data::Array(reader.read_array()?),
         };
@@ -140,6 +146,8 @@ pub fn u32_to_data_type(value: u32) -> Result<DataType, EngineError> {
         10 => Ok(DataType::Uint64),
         11 => Ok(DataType::Int64),
         12 => Ok(DataType::Float64),
-        _ => Err(EngineError::Gguf(format!("unknown value type code {value}"))),
+        _ => Err(EngineError::Gguf(format!(
+            "unknown value type code {value}"
+        ))),
     }
 }

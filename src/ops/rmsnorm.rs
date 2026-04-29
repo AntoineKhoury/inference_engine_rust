@@ -26,11 +26,14 @@ pub fn rmsnorm(
     input: &[f32],
     weights: &[f32],
     epsilon: f32,
-    output: &mut [f32]
+    output: &mut [f32],
 ) -> Result<(), EngineError> {
-
     #[cfg(debug_assertions)]
-    debug_assert_eq!(input.len(), weights.len(), "Dimension missmatch for RMSNorm");
+    debug_assert_eq!(
+        input.len(),
+        weights.len(),
+        "Dimension missmatch for RMSNorm"
+    );
 
     let mut sum_squared: f32 = 0.0;
     let dim: usize = input.len();

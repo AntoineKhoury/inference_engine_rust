@@ -20,10 +20,8 @@ use crate::model_config::{ModelConfig, TokenizerPromptConfig};
 use crate::model_loader::file_loader::read_file;
 use crate::model_loader::gguf_types::GGUFData;
 use crate::model_weights::{ModelWeightNames, ModelWeights};
-use crate::prefill::{
-    decode_forward, final_logits_last_token, prefill_forward, prefill_from_tokens,
-    prefill_state_for_single_token_loaded,
-};
+use crate::prefill::{prefill_from_tokens, prefill_state_for_single_token_loaded};
+use crate::runtime::{decode_forward, final_logits_last_token, prefill_forward};
 use crate::sampling::sample_greedy;
 use crate::tokenizer::Tokenizer;
 
@@ -135,7 +133,10 @@ impl EngineBench {
     }
 
     /// Strict interactive: fresh KV; time tokenizer, prefill prep, prompt eval, LM head + sample.
-    pub fn run_interactive_ttft(&mut self, prompt: &str) -> Result<InteractiveTtftMetrics, EngineError> {
+    pub fn run_interactive_ttft(
+        &mut self,
+        prompt: &str,
+    ) -> Result<InteractiveTtftMetrics, EngineError> {
         let t_enc0 = Instant::now();
         let prompt_ids = self
             .tokenizer
@@ -393,7 +394,8 @@ pub fn run_llama_completion_ttft_ref(
         let tail = tail_utf8(&combined, 4000);
         return Err(EngineError::Model(format!(
             "llama-completion exited with {}; last bytes of output:\n{tail}",
-            out.status)));
+            out.status
+        )));
     }
 
     parse_llama_completion_perf_text(&combined).ok_or_else(|| {
@@ -409,7 +411,11 @@ fn tail_utf8(s: &str, max_bytes: usize) -> &str {
         s
     } else {
         let skip = s.len() - max_bytes;
-        let start = s.char_indices().find(|(i, _)| *i >= skip).map(|(i, _)| i).unwrap_or(skip);
+        let start = s
+            .char_indices()
+            .find(|(i, _)| *i >= skip)
+            .map(|(i, _)| i)
+            .unwrap_or(skip);
         &s[start..]
     }
 }

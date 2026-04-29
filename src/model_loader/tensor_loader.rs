@@ -1,8 +1,8 @@
 use std::io::{BufRead, Seek};
 use std::sync::Arc;
 
-use crate::core::tensor::Tensor;
 use crate::EngineError;
+use crate::core::tensor::Tensor;
 use crate::model_loader::gguf_types::TensorInfo;
 use crate::model_loader::reader::Reader;
 use crate::model_loader::tensor::GgmlType;
@@ -30,10 +30,7 @@ pub fn load_tensor<R: BufRead + Seek>(
     tensor_data_base: u64,
 ) -> Result<Tensor, EngineError> {
     let ggml_type = GgmlType::try_from(tensor_info.type_id)?;
-    let num_elements = tensor_info
-        .dimensions
-        .iter()
-        .product::<usize>();
+    let num_elements = tensor_info.dimensions.iter().product::<usize>();
 
     let abs_offset = tensor_data_base
         .checked_add(tensor_info.offset as u64)

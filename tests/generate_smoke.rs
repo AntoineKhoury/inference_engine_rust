@@ -14,14 +14,12 @@ use inference_engine_rust::layers::attention::kv_caches_for_config;
 use inference_engine_rust::model_config::{ModelConfig, TokenizerPromptConfig};
 use inference_engine_rust::model_loader::file_loader::read_file;
 use inference_engine_rust::model_weights::{ModelWeightNames, ModelWeights};
-use inference_engine_rust::prefill::{
-    decode_forward, final_logits_last_token, prefill_forward, prefill_from_tokens,
-    prefill_state_for_single_token_loaded,
-};
+use inference_engine_rust::prefill::{prefill_from_tokens, prefill_state_for_single_token_loaded};
+use inference_engine_rust::runtime::{decode_forward, final_logits_last_token, prefill_forward};
 use inference_engine_rust::sampling::sample_greedy;
 use inference_engine_rust::tokenizer::Tokenizer;
 
-use common::{reference_model_path, tokenizer_model_path, REFERENCE_MODEL_REL_PATH};
+use common::{REFERENCE_MODEL_REL_PATH, reference_model_path, tokenizer_model_path};
 
 const PROMPT: &str = "Rust will rule the";
 const NEW_TOKENS: usize = 12;
@@ -77,15 +75,16 @@ fn greedy_generate_continuation_after_prompt() {
     let prompt_ids = tokenizer
         .encode_with_prompt_config(PROMPT, &tok_prompt)
         .expect("encode prompt");
-    assert!(!prompt_ids.is_empty(), "prompt should tokenize to non-empty ids");
+    assert!(
+        !prompt_ids.is_empty(),
+        "prompt should tokenize to non-empty ids"
+    );
     eprintln!("tokenizer prompt config: {tok_prompt:?}");
     eprintln!("prompt token ids ({}): {:?}", prompt_ids.len(), prompt_ids);
 
     let config = ModelConfig::from_gguf(&gguf).expect("config");
     let names = ModelWeightNames::resolve(&gguf, &config).expect("resolve names");
-    names
-        .load_all(&mut gguf, path_str)
-        .expect("load weights");
+    names.load_all(&mut gguf, path_str).expect("load weights");
 
     let prefill_in =
         prefill_from_tokens(&mut gguf, path_str, &config, &prompt_ids).expect("prefill embed");
@@ -107,10 +106,7 @@ fn greedy_generate_continuation_after_prompt() {
     for step in 0..NEW_TOKENS {
         let logits = final_logits_last_token(&state, &config, &weights).expect("logits");
         let n_nan = logits.iter().filter(|x| x.is_nan()).count();
-        let n_inf = logits
-            .iter()
-            .filter(|x| x.is_infinite())
-            .count();
+        let n_inf = logits.iter().filter(|x| x.is_infinite()).count();
         if let Some((i1, v1, i2, v2)) = logits_top2(&logits) {
             eprintln!(
                 "decode step {step}: logit top2 = ({i1}, {v1:.4}), ({i2}, {v2:.4}), nan={n_nan} inf={n_inf}"
@@ -122,8 +118,10 @@ fn greedy_generate_continuation_after_prompt() {
         let next_id = sample_greedy(&logits).expect("greedy sample");
         generated.push(next_id);
 
-        let step_in = prefill_state_for_single_token_loaded(&gguf, &config, next_id).expect("decode input");
-        state = decode_forward(&step_in, &config, &weights, &mut kv_caches).expect("decode forward");
+        let step_in =
+            prefill_state_for_single_token_loaded(&gguf, &config, next_id).expect("decode input");
+        state =
+            decode_forward(&step_in, &config, &weights, &mut kv_caches).expect("decode forward");
 
         let h = state.hidden();
         let h_sum: f32 = h.iter().sum();

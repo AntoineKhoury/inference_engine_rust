@@ -2,7 +2,7 @@
 // Functional for Q4_K and Q6_K quantization types
 
 use crate::core::tensor::TensorType;
-use crate::ops::quant::quant_k_handler::{extract_scale_min_k4, Q4K_BLOCK_SIZE, Q6K_BLOCK_SIZE};
+use crate::ops::quant::quant_k_handler::{Q4K_BLOCK_SIZE, Q6K_BLOCK_SIZE, extract_scale_min_k4};
 use crate::ops::quant::utils::f16_to_f32;
 
 impl<'a> Iterator for BlockIter<'a> {

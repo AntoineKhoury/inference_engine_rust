@@ -18,21 +18,21 @@ use std::io::{BufRead, Write};
 use std::path::PathBuf;
 
 use clap::Parser;
+use inference_engine_rust::EngineError;
 use inference_engine_rust::chat_prompt::{
-    gemma4_e2b_assistant_visible, gemma4_e2b_decode_has_structure_marker, ChatMessage,
-    ChatPromptStyle,
+    ChatMessage, ChatPromptStyle, gemma4_e2b_assistant_visible,
+    gemma4_e2b_decode_has_structure_marker,
 };
 use inference_engine_rust::layers::attention::kv_caches_for_config;
 use inference_engine_rust::model_config::{ModelConfig, TokenizerPromptConfig};
 use inference_engine_rust::model_loader::file_loader::read_file;
 use inference_engine_rust::model_weights::{ModelWeightNames, ModelWeights};
 use inference_engine_rust::prefill::{
-    decode_forward, final_logits_last_token, prefill_forward, prefill_from_tokens_loaded,
-    prefill_state_for_single_token_loaded,
+    prefill_from_tokens_loaded, prefill_state_for_single_token_loaded,
 };
+use inference_engine_rust::runtime::{decode_forward, final_logits_last_token, prefill_forward};
 use inference_engine_rust::sampling::sample_greedy;
 use inference_engine_rust::tokenizer::Tokenizer;
-use inference_engine_rust::EngineError;
 
 #[derive(Parser, Debug)]
 #[command(name = "chat")]

@@ -2,16 +2,16 @@
 pub mod matmul;
 
 // Activation functions (element-wise transforms)
-pub mod swiglu;
-pub mod softmax;
 pub mod gelu;
+pub mod softmax;
+pub mod swiglu;
 
 // Normalization operations
 pub mod rmsnorm;
 
 // Utility functions
-pub mod residual_add;
 pub mod cpu_features;
+pub mod residual_add;
 
 // Model specific functions
 pub mod rope;

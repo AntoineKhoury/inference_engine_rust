@@ -14,8 +14,7 @@ pub mod llama_logits_helpers;
 use std::path::{Path, PathBuf};
 
 /// Relative to workspace root (same as `CARGO_MANIFEST_DIR` for integration tests).
-pub const REFERENCE_MODEL_REL_PATH: &str =
-    "model/mistral-7b-v0.1/mistral-7b-v0.1.Q4_K_M.gguf";
+pub const REFERENCE_MODEL_REL_PATH: &str = "model/mistral-7b-v0.1/mistral-7b-v0.1.Q4_K_M.gguf";
 
 pub const REFERENCE_MODEL_DISPLAY_NAME: &str = "TheBloke Mistral-7B-v0.1 Q4_K_M";
 
@@ -72,8 +71,5 @@ pub fn gemma4_e2b_tokenizer_path() -> PathBuf {
 #[inline]
 pub fn assert_close(a: f32, b: f32, eps: f32) {
     let d = (a - b).abs();
-    assert!(
-        d <= eps,
-        "expected |{a} - {b}| <= {eps}, got diff {d}"
-    );
+    assert!(d <= eps, "expected |{a} - {b}| <= {eps}, got diff {d}");
 }

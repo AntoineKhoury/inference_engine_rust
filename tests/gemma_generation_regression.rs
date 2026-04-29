@@ -6,11 +6,10 @@ use inference_engine_rust::layers::attention::kv_caches_for_config;
 use inference_engine_rust::model_config::ModelConfig;
 use inference_engine_rust::model_loader::file_loader::read_file;
 use inference_engine_rust::model_weights::{ModelWeightNames, ModelWeights};
-use inference_engine_rust::prefill::{
-    final_logits_last_token, prefill_forward, prefill_from_tokens,
-};
+use inference_engine_rust::prefill::prefill_from_tokens;
+use inference_engine_rust::runtime::{final_logits_last_token, prefill_forward};
 
-use common::{gemma4_e2b_q8_gguf_path, GEMMA4_E2B_Q8_GGUF_REL_PATH};
+use common::{GEMMA4_E2B_Q8_GGUF_REL_PATH, gemma4_e2b_q8_gguf_path};
 
 fn argmax_f32(v: &[f32]) -> Option<usize> {
     v.iter()

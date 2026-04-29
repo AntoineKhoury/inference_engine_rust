@@ -15,13 +15,13 @@
 mod common;
 
 use inference_engine_rust::layers::embeddings::lookup_embeddings;
-use inference_engine_rust::model_loader::file_loader::read_file;
 use inference_engine_rust::model_config::TokenizerPromptConfig;
+use inference_engine_rust::model_loader::file_loader::read_file;
 
 use common::{
-    assert_close, reference_model_path, REF_EMB_TOKEN2_HEAD, REF_EMB_TOKEN2_IDX1024,
-    REF_EMB_TOKEN2_IDX4095, REFERENCE_MODEL_DISPLAY_NAME, REFERENCE_MODEL_DOWNLOAD_URL,
-    REFERENCE_MODEL_REL_PATH, REFERENCE_TOKEN_ID,
+    REF_EMB_TOKEN2_HEAD, REF_EMB_TOKEN2_IDX1024, REF_EMB_TOKEN2_IDX4095,
+    REFERENCE_MODEL_DISPLAY_NAME, REFERENCE_MODEL_DOWNLOAD_URL, REFERENCE_MODEL_REL_PATH,
+    REFERENCE_TOKEN_ID, assert_close, reference_model_path,
 };
 
 const EPS: f32 = 2e-5;
@@ -117,5 +117,9 @@ fn download_reference_gguf() {
         "downloaded file suspiciously small ({} bytes); wrong URL?",
         meta.len()
     );
-    eprintln!("downloaded {} ({:.2} GB)", path.display(), meta.len() as f64 / 1e9);
+    eprintln!(
+        "downloaded {} ({:.2} GB)",
+        path.display(),
+        meta.len() as f64 / 1e9
+    );
 }

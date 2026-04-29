@@ -1,9 +1,9 @@
 use crate::EngineError;
-use crate::model_loader::gguf_types::GGUFData;
 use crate::core::tensor::{Tensor, TensorType};
+use crate::model_loader::gguf_types::GGUFData;
 use crate::ops::quant::quant_k_handler::{
-    dequantize_q4k_block, dequantize_q6k_block, dequantize_q8_0_block, Q4K_BLOCK_SIZE,
-    Q6K_BLOCK_SIZE, Q8_0_BLOCK_ELEMENTS, Q8_0_BLOCK_SIZE,
+    Q4K_BLOCK_SIZE, Q6K_BLOCK_SIZE, Q8_0_BLOCK_ELEMENTS, Q8_0_BLOCK_SIZE, dequantize_q4k_block,
+    dequantize_q6k_block, dequantize_q8_0_block,
 };
 const BLOCK_ELEMENTS: usize = 256;
 
@@ -83,11 +83,7 @@ fn resolve_embedding_tensor_name(gguf_data: &GGUFData) -> Result<&'static str, E
         "embeddings.weight",
     ];
     for &name in &NAMES {
-        if gguf_data
-            .tensors_metadata()
-            .iter()
-            .any(|t| t.name == name)
-        {
+        if gguf_data.tensors_metadata().iter().any(|t| t.name == name) {
             return Ok(name);
         }
     }
@@ -108,7 +104,7 @@ fn lookup_embedding_rows(
             dims
         )));
     }
-    
+
     // Handle both layouts: [vocab_size, hidden_dim] or [hidden_dim, vocab_size]
     // Mistral uses [hidden_dim, vocab_size] = [4096, 32000]
     let (hidden_dim, vocab_size) = if dims[0] < dims[1] {
@@ -118,7 +114,7 @@ fn lookup_embedding_rows(
         // Likely [vocab_size, hidden_dim] - standard format
         (dims[1], dims[0])
     };
-    
+
     // Validate token IDs are within vocabulary range
     for &token_id in token_ids {
         if token_id as usize >= vocab_size {
@@ -127,7 +123,7 @@ fn lookup_embedding_rows(
             )));
         }
     }
-    
+
     let buf = embedding_tensor.buffer();
     let mut embeddings = Vec::with_capacity(token_ids.len());
 
@@ -153,11 +149,9 @@ fn lookup_embedding_rows(
                     let el = idx % BLOCK_ELEMENTS;
                     if block_idx != cached_block {
                         let start = block_idx * Q4K_BLOCK_SIZE;
-                        let block = buf
-                            .get(start..start + Q4K_BLOCK_SIZE)
-                            .ok_or_else(|| {
-                                EngineError::Tensor("Q4K embedding block out of bounds".into())
-                            })?;
+                        let block = buf.get(start..start + Q4K_BLOCK_SIZE).ok_or_else(|| {
+                            EngineError::Tensor("Q4K embedding block out of bounds".into())
+                        })?;
                         dequantize_q4k_block(block, &mut decoded)?;
                         cached_block = block_idx;
                     }
@@ -177,11 +171,9 @@ fn lookup_embedding_rows(
                     let el = idx % BLOCK_ELEMENTS;
                     if block_idx != cached_block {
                         let start = block_idx * Q6K_BLOCK_SIZE;
-                        let block = buf
-                            .get(start..start + Q6K_BLOCK_SIZE)
-                            .ok_or_else(|| {
-                                EngineError::Tensor("Q6K embedding block out of bounds".into())
-                            })?;
+                        let block = buf.get(start..start + Q6K_BLOCK_SIZE).ok_or_else(|| {
+                            EngineError::Tensor("Q6K embedding block out of bounds".into())
+                        })?;
                         dequantize_q6k_block(block, &mut decoded)?;
                         cached_block = block_idx;
                     }
@@ -201,11 +193,9 @@ fn lookup_embedding_rows(
                     let el = idx % Q8_0_BLOCK_ELEMENTS;
                     if block_idx != cached_block {
                         let start = block_idx * Q8_0_BLOCK_SIZE;
-                        let block = buf
-                            .get(start..start + Q8_0_BLOCK_SIZE)
-                            .ok_or_else(|| {
-                                EngineError::Tensor("Q8_0 embedding block out of bounds".into())
-                            })?;
+                        let block = buf.get(start..start + Q8_0_BLOCK_SIZE).ok_or_else(|| {
+                            EngineError::Tensor("Q8_0 embedding block out of bounds".into())
+                        })?;
                         dequantize_q8_0_block(block, &mut decoded)?;
                         cached_block = block_idx;
                     }
@@ -215,8 +205,8 @@ fn lookup_embedding_rows(
             }
         }
     }
-    
-       Ok(embeddings)
+
+    Ok(embeddings)
 }
 
 /// Read a single logical row `token_id` from a 2D embedding table (same layout rules as
@@ -232,9 +222,9 @@ pub fn read_token_row_f32(
 }
 
 /// Get the embedding dimension (hidden_dim) from the model
-/// 
+///
 /// Useful for validating inputs and allocating buffers with correct sizes
-/// 
+///
 /// Note: This requires the embedding tensor to be loaded. Use `load_single_tensor()`
 /// if you haven't loaded all tensors yet.
 pub fn get_embedding_dim(gguf_data: &GGUFData) -> Result<usize, EngineError> {
@@ -247,19 +237,19 @@ pub fn get_embedding_dim(gguf_data: &GGUFData) -> Result<usize, EngineError> {
                 "embedding tensor not found; load it first with load_single_tensor()".into(),
             )
         })?;
-    
+
     let dims = embedding_tensor.dimensions();
     if dims.len() != 2 {
         return Err(EngineError::Tensor("embedding tensor must be 2D".into()));
     }
-    
+
     // Handle both layouts: [vocab_size, hidden_dim] or [hidden_dim, vocab_size]
     // Return the smaller dimension as hidden_dim
     Ok(if dims[0] < dims[1] { dims[0] } else { dims[1] })
 }
 
 /// Get the vocabulary size from the embedding tensor
-/// 
+///
 /// Note: This requires the embedding tensor to be loaded. Use `load_single_tensor()`
 /// if you haven't loaded all tensors yet.
 pub fn get_vocab_size(gguf_data: &GGUFData) -> Result<usize, EngineError> {
@@ -272,12 +262,12 @@ pub fn get_vocab_size(gguf_data: &GGUFData) -> Result<usize, EngineError> {
                 "embedding tensor not found; load it first with load_single_tensor()".into(),
             )
         })?;
-    
+
     let dims = embedding_tensor.dimensions();
     if dims.len() != 2 {
         return Err(EngineError::Tensor("embedding tensor must be 2D".into()));
     }
-    
+
     // Handle both layouts: [vocab_size, hidden_dim] or [hidden_dim, vocab_size]
     // Return the larger dimension as vocab_size
     Ok(if dims[0] > dims[1] { dims[0] } else { dims[1] })
@@ -287,7 +277,7 @@ pub fn get_vocab_size(gguf_data: &GGUFData) -> Result<usize, EngineError> {
 mod tests {
     use super::*;
     use crate::model_loader::file_loader::read_file;
-    
+
     #[test]
     #[ignore = "requires model/mistral-7b-v0.1/mistral-7b-v0.1.Q4_K_M.gguf (cargo test -- --ignored)"]
     fn test_embedding_lookup() {
@@ -296,19 +286,18 @@ mod tests {
         let mut gguf_data = read_file(path).expect("Failed to read GGUF file");
         // Don't load all tensors - just load the embedding tensor on demand
         // gguf_data.load_tensors(path).expect("Failed to load tensors");
-        
+
         // Test with a few token IDs (this will lazy-load the embedding tensor)
         let token_ids = vec![1, 2, 3];
         let embeddings = lookup_embeddings(&mut gguf_data, path, &token_ids)
             .expect("Failed to lookup embeddings");
-        
+
         // Verify we got the right number of embeddings
         assert_eq!(embeddings.len(), token_ids.len());
-        
+
         // Verify each embedding has the correct dimension
-        let hidden_dim = get_embedding_dim(&gguf_data)
-            .expect("Failed to get embedding dimension");
-        
+        let hidden_dim = get_embedding_dim(&gguf_data).expect("Failed to get embedding dimension");
+
         for embedding in &embeddings {
             assert_eq!(embedding.len(), hidden_dim, "Embedding dimension mismatch");
             let n_nan = embedding.iter().filter(|x| x.is_nan()).count();
@@ -318,55 +307,58 @@ mod tests {
             );
         }
     }
-    
+
     #[test]
     #[ignore = "requires model/mistral-7b-v0.1/mistral-7b-v0.1.Q4_K_M.gguf (cargo test -- --ignored)"]
     fn test_get_embedding_dim() {
         let path = "model/mistral-7b-v0.1/mistral-7b-v0.1.Q4_K_M.gguf";
         let mut gguf_data = read_file(path).expect("Failed to read GGUF file");
         // Load just the embedding tensor
-        gguf_data.load_single_tensor(path, "token_embd.weight")
+        gguf_data
+            .load_single_tensor(path, "token_embd.weight")
             .expect("Failed to load embedding tensor");
-        
-        let dim = get_embedding_dim(&gguf_data)
-            .expect("Failed to get embedding dimension");
-        
+
+        let dim = get_embedding_dim(&gguf_data).expect("Failed to get embedding dimension");
+
         // Mistral-7B should have 4096 hidden dimension
         assert_eq!(dim, 4096, "Expected hidden_dim=4096 for Mistral-7B");
     }
-    
+
     #[test]
     #[ignore = "requires model/mistral-7b-v0.1/mistral-7b-v0.1.Q4_K_M.gguf (cargo test -- --ignored)"]
     fn test_get_vocab_size() {
         let path = "model/mistral-7b-v0.1/mistral-7b-v0.1.Q4_K_M.gguf";
         let mut gguf_data = read_file(path).expect("Failed to read GGUF file");
         // Load just the embedding tensor
-        gguf_data.load_single_tensor(path, "token_embd.weight")
+        gguf_data
+            .load_single_tensor(path, "token_embd.weight")
             .expect("Failed to load embedding tensor");
-        
-        let vocab_size = get_vocab_size(&gguf_data)
-            .expect("Failed to get vocabulary size");
-        
+
+        let vocab_size = get_vocab_size(&gguf_data).expect("Failed to get vocabulary size");
+
         // Mistral-7B should have vocabulary size around 32000
-        assert_eq!(vocab_size, 32000, "Expected vocab_size=32000 for Mistral-7B");
+        assert_eq!(
+            vocab_size, 32000,
+            "Expected vocab_size=32000 for Mistral-7B"
+        );
     }
-    
+
     #[test]
     #[ignore = "requires model/mistral-7b-v0.1/mistral-7b-v0.1.Q4_K_M.gguf (cargo test -- --ignored)"]
     fn test_out_of_vocab_error() {
         let path = "model/mistral-7b-v0.1/mistral-7b-v0.1.Q4_K_M.gguf";
         let mut gguf_data = read_file(path).expect("Failed to read GGUF file");
         // Load just the embedding tensor
-        gguf_data.load_single_tensor(path, "token_embd.weight")
+        gguf_data
+            .load_single_tensor(path, "token_embd.weight")
             .expect("Failed to load embedding tensor");
-        
-        let vocab_size = get_vocab_size(&gguf_data)
-            .expect("Failed to get vocabulary size");
-        
+
+        let vocab_size = get_vocab_size(&gguf_data).expect("Failed to get vocabulary size");
+
         // Try to lookup an out-of-vocabulary token
         let invalid_token_id = vocab_size as u32 + 100;
         let token_ids = vec![invalid_token_id];
-        
+
         let result = lookup_embeddings(&mut gguf_data, path, &token_ids);
         assert!(result.is_err(), "Should error on out-of-vocabulary token");
     }

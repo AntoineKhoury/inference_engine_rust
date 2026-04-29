@@ -89,13 +89,12 @@ impl Tensor {
         &self.dimensions
     }
 
-    pub fn stride(&self) -> &[usize]{
+    pub fn stride(&self) -> &[usize] {
         &self.stride
     }
-    pub fn dtype(&self) -> TensorType{
+    pub fn dtype(&self) -> TensorType {
         self.dtype
     }
-
 }
 
 fn compute_row_major_stride(dimensions: &[usize]) -> Vec<usize> {

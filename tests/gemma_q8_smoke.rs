@@ -57,10 +57,7 @@ fn gemma4_print_tensor_shapes_debug() {
         "blk.0.inp_gate.weight",
         "blk.0.proj.weight",
     ] {
-        let t = gguf
-            .tensors_metadata()
-            .iter()
-            .find(|x| x.name == name);
+        let t = gguf.tensors_metadata().iter().find(|x| x.name == name);
         eprintln!("{name}: {:?}", t.map(|x| x.dimensions.clone()));
     }
 }

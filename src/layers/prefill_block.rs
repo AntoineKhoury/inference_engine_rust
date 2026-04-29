@@ -2,12 +2,12 @@ use std::sync::Arc;
 
 use crate::EngineError;
 use crate::core::tensor::{Tensor, TensorType};
-use crate::layers::attention::{decode_attention_layer, prefill_attention_layer, KVCache};
+use crate::layers::attention::{KVCache, decode_attention_layer, prefill_attention_layer};
 use crate::model_config::{ModelConfig, ModelFamily};
 use crate::model_weights::LayerWeights;
 use crate::ops::gelu::gelu_tanh;
 use crate::ops::matmul::matmul;
-use crate::ops::quant::quant_k_handler::{dequantize_q8_0_block, Q8_0_BLOCK_SIZE};
+use crate::ops::quant::quant_k_handler::{Q8_0_BLOCK_SIZE, dequantize_q8_0_block};
 use crate::ops::residual_add::residual_add;
 use crate::ops::rmsnorm::rmsnorm;
 use crate::ops::swiglu::swiglu;
@@ -224,7 +224,8 @@ fn mistral_prefill_ffn_with_norm(
         return Err(EngineError::Model(format!(
             "ffn_norm weights len {} != hidden_dim {}",
             ffn_norm_weights.len(),
-            hidden_dim)));
+            hidden_dim
+        )));
     }
 
     let mut normed = vec![0.0f32; seq_len * hidden_dim];
@@ -359,12 +360,7 @@ fn apply_per_layer_tail(
     let mut normed_row = vec![0.0f32; hidden_dim];
     for p in 0..seq_len {
         let h0 = p * hidden_dim;
-        rmsnorm(
-            &proj_out[h0..h0 + hidden_dim],
-            w_post,
-            eps,
-            &mut normed_row,
-        )?;
+        rmsnorm(&proj_out[h0..h0 + hidden_dim], w_post, eps, &mut normed_row)?;
         for i in 0..hidden_dim {
             hidden[h0 + i] += normed_row[i];
         }
@@ -383,7 +379,8 @@ pub fn prefill_layer_block(
     let seq_len = input.seq_len();
     let hidden_dim = input.hidden_dim();
     let ffn_dim = config.layer_dims_for(layer_idx)?.ffn_dim;
-    let mut ffn_out = prefill_ffn_with_norm(&attn_out, seq_len, hidden_dim, ffn_dim, config, weights)?;
+    let mut ffn_out =
+        prefill_ffn_with_norm(&attn_out, seq_len, hidden_dim, ffn_dim, config, weights)?;
 
     if config.embedding_length_per_layer > 0 {
         apply_per_layer_tail(
@@ -517,12 +514,7 @@ fn gemma4_decode_attention_with_norm(
     )?;
 
     let mut tmp = vec![0.0f32; hidden_dim];
-    rmsnorm(
-        &attn_out,
-        post_attn_w,
-        config.rms_norm_eps,
-        &mut tmp,
-    )?;
+    rmsnorm(&attn_out, post_attn_w, config.rms_norm_eps, &mut tmp)?;
     attn_out.copy_from_slice(&tmp);
 
     let mut residual_out = vec![0.0f32; hidden_dim];
@@ -610,11 +602,7 @@ fn apply_gemma_layer_output_scale(
 }
 
 fn tensor_from_f32_slice(data: &[f32], dimensions: Vec<usize>) -> Tensor {
-    Tensor::new(
-        TensorType::F32,
-        Arc::new(f32_bytes(data)),
-        dimensions,
-    )
+    Tensor::new(TensorType::F32, Arc::new(f32_bytes(data)), dimensions)
 }
 
 fn empty_f32_tensor(dimensions: Vec<usize>) -> Tensor {

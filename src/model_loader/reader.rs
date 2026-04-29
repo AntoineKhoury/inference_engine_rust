@@ -17,7 +17,10 @@ pub struct Reader<R: BufRead + Seek> {
 
 impl<R: BufRead + Seek> Reader<R> {
     pub fn new(buffer: R, initial_pos: u64) -> Self {
-        Reader { buffer, pos: initial_pos }
+        Reader {
+            buffer,
+            pos: initial_pos,
+        }
     }
 
     pub fn position(&self) -> u64 {
@@ -103,7 +106,9 @@ impl<R: BufRead + Seek> Reader<R> {
             0 => false,
             1 => true,
             v => {
-                return Err(EngineError::Gguf(format!("invalid GGUF bool byte (expected 0 or 1, got {v})")));
+                return Err(EngineError::Gguf(format!(
+                    "invalid GGUF bool byte (expected 0 or 1, got {v})"
+                )));
             }
         };
         Ok(b)

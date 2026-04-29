@@ -2,48 +2,40 @@
 //! element `(i0, i1)` is at **`i0 + i1 * ne0`** (first dimension stride-1), **not** C row-major
 //! `i0 * ne1 + i1`. Matmul uses `W(input_kk, out_col)` at `kk + col * K` with `K = ne0`.
 
-use crate::core::tensor::{Tensor, TensorType};
 use crate::EngineError;
+use crate::core::tensor::{Tensor, TensorType};
 use crate::ops::quant::quant_k_handler::{
-    dequantize_q4k_block, dequantize_q6k_block, dequantize_q8_0_block, Q4K_BLOCK_SIZE,
-    Q6K_BLOCK_SIZE, Q8_0_BLOCK_ELEMENTS, Q8_0_BLOCK_SIZE,
+    Q4K_BLOCK_SIZE, Q6K_BLOCK_SIZE, Q8_0_BLOCK_ELEMENTS, Q8_0_BLOCK_SIZE, dequantize_q4k_block,
+    dequantize_q6k_block, dequantize_q8_0_block,
 };
 
 const BLOCK_ELEMENTS: usize = 256;
 
-pub fn matmul(
-    a: &Tensor,
-    b: &Tensor,
-    output: &mut Tensor,
-) -> Result<(), EngineError> {
+pub fn matmul(a: &Tensor, b: &Tensor, output: &mut Tensor) -> Result<(), EngineError> {
     // Validate dimensions
     let b_dims = b.dimensions();
     let a_dims = a.dimensions();
     let output_dims = output.dimensions();
 
-    
     if a_dims[1] != b_dims[0] {
         return Err(EngineError::MatMul(format!(
             "inner dim mismatch: input {} vs weight {}",
             a_dims[1], b_dims[0]
         )));
     }
-    
+
     if (output_dims[0] * output_dims[1]) != (a_dims[0] * b_dims[1]) {
         return Err(EngineError::MatMul(format!(
             "output dims {}×{} incompatible with matmul result {}×{}",
-            output_dims[0],
-            output_dims[1],
-            a_dims[0],
-            b_dims[1]
+            output_dims[0], output_dims[1], a_dims[0], b_dims[1]
         )));
     }
 
     // Dispatch to appropriate kernel based on weight tensor type
     match (a.dtype(), b.dtype()) {
-        (TensorType::F32, TensorType::F32) => matmul_f32_f32(a,b, output),
-        (TensorType::F32,TensorType::Q4K) => matmul_f32_q4k(a,b, output),
-        (TensorType::F32,TensorType::Q6K) => matmul_f32_q6k(a, b, output),
+        (TensorType::F32, TensorType::F32) => matmul_f32_f32(a, b, output),
+        (TensorType::F32, TensorType::Q4K) => matmul_f32_q4k(a, b, output),
+        (TensorType::F32, TensorType::Q6K) => matmul_f32_q6k(a, b, output),
         (TensorType::F32, TensorType::Q8_0) => matmul_f32_q8_0(a, b, output),
         _ => Err(EngineError::MatMul(format!(
             "unsupported matmul: {:?} × {:?}",
@@ -57,7 +49,10 @@ pub fn matmul(
 /// `output[row, col] = sum_kk input[row, kk] * W(kk, col)` with ggml `W` indexing.
 fn matmul_f32_f32(input: &Tensor, weight: &Tensor, output: &mut Tensor) -> Result<(), EngineError> {
     // Expect input: [M, K], weight: [K, N], output: [M, N]
-    if input.dimensions().len() != 2 || weight.dimensions().len() != 2 || output.dimensions().len() != 2 {
+    if input.dimensions().len() != 2
+        || weight.dimensions().len() != 2
+        || output.dimensions().len() != 2
+    {
         return Err(EngineError::MatMul(
             "F32 matmul expects 2D tensors for input, weight, and output".into(),
         ));
@@ -99,24 +94,26 @@ fn matmul_f32_f32(input: &Tensor, weight: &Tensor, output: &mut Tensor) -> Resul
 }
 
 /// F32 × Q4K matrix multiplication with fused dequantization
-/// 
+///
 /// Scalar implementation with on-the-fly dequantization:
 /// - Dequantize: weight = (quantized * scale) + min
 /// - Scales/mins are per block of 32 weights
 /// - Q4K: quantized values are in range 0-15
-/// 
+///
 /// This avoids writing dequantized weights to memory, improving cache locality
-fn matmul_f32_q4k(
-    input: &Tensor,
-    weight: &Tensor,
-    output: &mut Tensor,
-) -> Result<(), EngineError> {
-    if input.dimensions().len() != 2 || weight.dimensions().len() != 2 || output.dimensions().len() != 2 {
+fn matmul_f32_q4k(input: &Tensor, weight: &Tensor, output: &mut Tensor) -> Result<(), EngineError> {
+    if input.dimensions().len() != 2
+        || weight.dimensions().len() != 2
+        || output.dimensions().len() != 2
+    {
         return Err(EngineError::MatMul(
             "Q4K matmul expects 2D tensors for input, weight, and output".into(),
         ));
     }
-    if input.dtype() != TensorType::F32 || output.dtype() != TensorType::F32 || weight.dtype() != TensorType::Q4K {
+    if input.dtype() != TensorType::F32
+        || output.dtype() != TensorType::F32
+        || weight.dtype() != TensorType::Q4K
+    {
         return Err(EngineError::MatMul(
             "Q4K matmul expects F32 input/output and Q4K weights".into(),
         ));
@@ -173,9 +170,7 @@ fn matmul_f32_q4k(
                     let block_end = block_start + Q4K_BLOCK_SIZE;
                     let block = weight_bytes
                         .get(block_start..block_end)
-                        .ok_or_else(|| {
-                            EngineError::MatMul("Q4K block out of bounds".into())
-                        })?;
+                        .ok_or_else(|| EngineError::MatMul("Q4K block out of bounds".into()))?;
                     dequantize_q4k_block(block, &mut decoded_block)?;
                     current_block_idx = block_idx;
                 }
@@ -195,12 +190,18 @@ fn matmul_f32_q8_0(
     weight: &Tensor,
     output: &mut Tensor,
 ) -> Result<(), EngineError> {
-    if input.dimensions().len() != 2 || weight.dimensions().len() != 2 || output.dimensions().len() != 2 {
+    if input.dimensions().len() != 2
+        || weight.dimensions().len() != 2
+        || output.dimensions().len() != 2
+    {
         return Err(EngineError::MatMul(
             "Q8_0 matmul expects 2D tensors for input, weight, and output".into(),
         ));
     }
-    if input.dtype() != TensorType::F32 || output.dtype() != TensorType::F32 || weight.dtype() != TensorType::Q8_0 {
+    if input.dtype() != TensorType::F32
+        || output.dtype() != TensorType::F32
+        || weight.dtype() != TensorType::Q8_0
+    {
         return Err(EngineError::MatMul(
             "Q8_0 matmul expects F32 input/output and Q8_0 weights".into(),
         ));
@@ -271,22 +272,24 @@ fn matmul_f32_q8_0(
 
 /// F32 × Q6K matrix multiplication with fused dequantization
 /// Similar to Q4K but handles 6-bit quantization (values 0-63)
-/// 
+///
 /// Scalar implementation with on-the-fly dequantization:
 /// - Dequantize: weight = (quantized * scale) + min
 /// - Scales/mins are per block of 32 weights
 /// - Q6K: quantized values are in range 0-63
-fn matmul_f32_q6k(
-    input: &Tensor,
-    weight: &Tensor,
-    output: &mut Tensor,
-) -> Result<(), EngineError> {
-    if input.dimensions().len() != 2 || weight.dimensions().len() != 2 || output.dimensions().len() != 2 {
+fn matmul_f32_q6k(input: &Tensor, weight: &Tensor, output: &mut Tensor) -> Result<(), EngineError> {
+    if input.dimensions().len() != 2
+        || weight.dimensions().len() != 2
+        || output.dimensions().len() != 2
+    {
         return Err(EngineError::MatMul(
             "Q6K matmul expects 2D tensors for input, weight, and output".into(),
         ));
     }
-    if input.dtype() != TensorType::F32 || output.dtype() != TensorType::F32 || weight.dtype() != TensorType::Q6K {
+    if input.dtype() != TensorType::F32
+        || output.dtype() != TensorType::F32
+        || weight.dtype() != TensorType::Q6K
+    {
         return Err(EngineError::MatMul(
             "Q6K matmul expects F32 input/output and Q6K weights".into(),
         ));
@@ -341,9 +344,7 @@ fn matmul_f32_q6k(
                     let block_end = block_start + Q6K_BLOCK_SIZE;
                     let block = weight_bytes
                         .get(block_start..block_end)
-                        .ok_or_else(|| {
-                            EngineError::MatMul("Q6K block out of bounds".into())
-                        })?;
+                        .ok_or_else(|| EngineError::MatMul("Q6K block out of bounds".into()))?;
                     dequantize_q6k_block(block, &mut decoded_block)?;
                     current_block_idx = block_idx;
                 }
@@ -356,7 +357,6 @@ fn matmul_f32_q6k(
 
     Ok(())
 }
-
 
 #[cfg(test)]
 mod tests {

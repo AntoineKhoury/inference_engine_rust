@@ -1,5 +1,5 @@
-use thiserror::Error;
 use std::sync::Arc;
+use thiserror::Error;
 
 use crate::EngineError;
 use crate::core::tensor::{Tensor, TensorType};
@@ -117,16 +117,10 @@ pub enum KVCacheError {
     KVDimMismatch { k_size: usize },
 
     #[error("KV cache position {position} is out of bounds (current_pos is {current_pos})")]
-    PositionOutOfBounds {
-        position: usize,
-        current_pos: usize,
-    },
+    PositionOutOfBounds { position: usize, current_pos: usize },
 
     #[error("KV head index {kv_head} is out of bounds (n_kv_heads is {n_kv_heads})")]
-    KvHeadOutOfBounds {
-        kv_head: usize,
-        n_kv_heads: usize,
-    },
+    KvHeadOutOfBounds { kv_head: usize, n_kv_heads: usize },
 }
 
 /// One [`KVCache`] per layer, sized from [`ModelConfig::layer_dims`] (per-layer head width).
@@ -227,7 +221,9 @@ pub fn prefill_attention_layer(
         .flatten();
     if let Some(src) = borrow_src {
         let ksrc = kv_caches.get(src).ok_or_else(|| {
-            EngineError::Model(format!("prefill attention: KV borrow source {src} out of range"))
+            EngineError::Model(format!(
+                "prefill attention: KV borrow source {src} out of range"
+            ))
         })?;
         if ksrc.n_kv_heads() != config.n_kv_heads || ksrc.head_dim() != head_dim {
             return Err(EngineError::Model(
@@ -348,7 +344,8 @@ pub fn prefill_attention_layer(
         for pos in 0..seq_len {
             let row_start = pos * kv_dim;
             let row_end = row_start + kv_dim;
-            kv_caches[layer_idx].append_kv(&k_data[row_start..row_end], &v_data[row_start..row_end])?;
+            kv_caches[layer_idx]
+                .append_kv(&k_data[row_start..row_end], &v_data[row_start..row_end])?;
         }
     }
 
@@ -652,11 +649,7 @@ pub fn decode_attention_layer(
 }
 
 fn tensor_from_f32_slice(data: &[f32], dimensions: Vec<usize>) -> Tensor {
-    Tensor::new(
-        TensorType::F32,
-        Arc::new(f32_bytes(data)),
-        dimensions,
-    )
+    Tensor::new(TensorType::F32, Arc::new(f32_bytes(data)), dimensions)
 }
 
 fn empty_f32_tensor(dimensions: Vec<usize>) -> Tensor {

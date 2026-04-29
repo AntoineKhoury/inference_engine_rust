@@ -97,12 +97,7 @@ pub fn compute_packed_per_layer_inputs(
         let base = p * pack;
         for l in 0..n_layers {
             let off = base + l * ple_dim;
-            rmsnorm(
-                &proj[off..off + ple_dim],
-                norm_w,
-                eps,
-                &mut normed_chunk,
-            )?;
+            rmsnorm(&proj[off..off + ple_dim], norm_w, eps, &mut normed_chunk)?;
             let tok_off = l * ple_dim;
             for i in 0..ple_dim {
                 out[off + i] = (normed_chunk[i] + token_row[tok_off + i]) * combine;

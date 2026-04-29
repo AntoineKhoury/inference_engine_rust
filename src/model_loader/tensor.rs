@@ -1,5 +1,5 @@
-use crate::core::tensor::TensorType;
 use crate::EngineError;
+use crate::core::tensor::TensorType;
 
 #[allow(non_camel_case_types)]
 #[repr(u32)]
