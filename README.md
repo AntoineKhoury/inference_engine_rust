@@ -43,11 +43,18 @@ cargo run --release --bin bench_compare -- cold-start
 cargo run --release --bin bench_compare -- interactive-ttft
 cargo run --release --bin bench_compare -- decode-throughput -n 128
 
+# Repeat each benchmark (default is --runs 5; minimum allowed is 5)
+cargo run --release --bin bench_compare -- --runs 5 interactive-ttft
+
 # vs llama.cpp on the same GGUF / prompt (global flags work after the subcommand too)
-cargo run --release --bin bench_compare -- interactive-ttft --compare-llama
+cargo run --release --bin bench_compare -- --compare-llama interactive-ttft
+
+# Fast iteration on Gemma, then confirm on Mistral before logging README history
+cargo run --release --bin bench_compare -- --runs 5 -m model/gemma-4-e2b-it/gemma-4-E2B-it-Q8_0.gguf -t model/gemma-4-e2b-it/tokenizer.json interactive-ttft
+cargo run --release --bin bench_compare -- --runs 5 --compare-llama interactive-ttft
 
 # JSON + fail if decode tok/s is below a floor (useful for CI)
-cargo run --release --bin bench_compare -- all --json --min-decode-tps 5.0
+cargo run --release --bin bench_compare -- --runs 5 --json --min-decode-tps 5.0 all
 ```
 
 Shared flags: **`-m`** / **`--model`**, **`-t`** / **`--tokenizer`**, **`--prompt`**. Field meanings are in [`src/bench_metrics.rs`](src/bench_metrics.rs) and [`LEARNINGS_SYSTEM.md`](LEARNINGS_SYSTEM.md).
@@ -69,6 +76,7 @@ Shared flags: **`-m`** / **`--model`**, **`-t`** / **`--tokenizer`**, **`--promp
 
 | date | exp | machine_id | commit | delta_vs_previous | bench_command | prompt_toks | rust_ttft_infer_ms | llama_ttft_infer_ms | ratio_ttft | rust_decode_tps | llama_decode_tps | llama_t | llama_ngl | speed_target | notes |
 |------|-----|------------|--------|-------------------|---------------|-------------|--------------------|--------------------|------------|-----------------|------------------|---------|-----------|--------------|-------|
+| 2026-04-29 | exp-004 | ak-mbp-m1 | 09c184c | enabled Rayon parallel matmul + attention-head loops; switched benchmark target back to Mistral from Gemma row below | `bench_compare --json --compare-llama interactive-ttft` + `decode-throughput --decode-tokens 5` | 6 | 24510.4 | 1760.9 | 13.9 | 0.060 | — | 1 | 0 | reduce Mistral TTFT while preserving correctness | Mistral 7B Q4_K_M. TTFT improved strongly vs earlier Mistral baseline (exp-002: 74533.9 -> 24510.4 ms), but short decode throughput regressed (0.083 -> 0.060 tok/s), likely from decode-side parallel overhead at small workloads. llama load 1761 ms excluded. |
 | 2026-04-29 | exp-003 | ak-mbp-m1 | ec077b7 | new model baseline (Gemma 4 E2B Q8) | `bench_compare --json -m gemma-4-e2b-it/gemma-4-E2B-it-Q8_0.gguf -t gemma-4-e2b-it/tokenizer.json interactive-ttft` + `decode-throughput --decode-tokens 5` | 5 | 16882.4 | — | — | 0.322 | — | — | — | establish Gemma decode+TTFT baseline | Gemma 4 E2B IT Q8_0 (2.6B). prompt_eval 15554 ms, lm_head_sample 1087 ms, warm_prefill 14917 ms. Default prompt `Rust will rule the`. |
 | 2026-04-29 | exp-002 | ak-mbp-m1 | ec077b7 | baseline re-measure | `bench_compare --json --compare-llama interactive-ttft` + `decode-throughput --decode-tokens 5` | 6 | 74533.9 | 2833.4 | 26.3 | 0.083 | — | 1 | 0 | re-establish Mistral TTFT+decode baseline | Mistral 7B Q4_K_M. llama flags: `-t 1 -ngl 0 --device none --no-op-offload --no-warmup --perf -n 1` (CPU-only, single-thread, no GPU). prompt_eval 74288 ms, lm_head_sample 246 ms. llama load 2840 ms excluded. Decode: 5 toks in 60188 ms. Default prompt `Rust will rule the`. |
 

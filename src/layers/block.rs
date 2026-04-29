@@ -3,7 +3,9 @@
 use crate::EngineError;
 use crate::engine::state::ForwardState;
 use crate::layers::attention::{KVCache, decode_attention_with_norm, prefill_attention_with_norm};
-use crate::layers::ffn::{apply_gemma_layer_output_scale, apply_per_layer_tail, prefill_ffn_with_norm};
+use crate::layers::ffn::{
+    apply_gemma_layer_output_scale, apply_per_layer_tail, prefill_ffn_with_norm,
+};
 use crate::model_config::ModelConfig;
 use crate::model_weights::LayerWeights;
 

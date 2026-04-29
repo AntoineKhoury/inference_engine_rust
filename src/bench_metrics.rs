@@ -15,13 +15,13 @@ use std::time::Instant;
 use serde::Serialize;
 
 use crate::EngineError;
+use crate::engine::embed::prefill_from_tokens_loaded;
+use crate::engine::session::InferenceSession;
 use crate::layers::attention::kv_caches_for_config;
 use crate::loaded_model::LoadedModel;
 use crate::model_config::{ModelConfig, TokenizerPromptConfig};
 use crate::model_loader::file_loader::read_file;
 use crate::model_weights::ModelWeightNames;
-use crate::engine::embed::prefill_from_tokens_loaded;
-use crate::engine::session::InferenceSession;
 use crate::tokenizer::Tokenizer;
 
 /// Default prompt (matches `tests/generate_smoke.rs`).

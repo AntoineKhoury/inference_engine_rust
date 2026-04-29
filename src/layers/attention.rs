@@ -1,16 +1,17 @@
+use rayon::prelude::*;
 use std::sync::Arc;
 use thiserror::Error;
 
 use crate::EngineError;
 use crate::core::tensor::{Tensor, TensorType};
+use crate::engine::state::ForwardState;
 use crate::model_config::{LayerAttentionSpec, LayerDims, ModelConfig, ModelFamily};
 use crate::model_weights::LayerWeights;
 use crate::ops::matmul::matmul;
+use crate::ops::residual_add::residual_add;
 use crate::ops::rmsnorm::{rmsnorm, rmsnorm_inplace_no_scale};
 use crate::ops::rope::rope;
 use crate::ops::softmax::softmax;
-use crate::engine::state::ForwardState;
-use crate::ops::residual_add::residual_add;
 /// Per-layer KV cache: one `[head_dim]` slice per **KV head** per timestep (GQA/MQA).
 pub struct KVCache {
     k_cache: Vec<f32>,
@@ -365,50 +366,52 @@ pub fn prefill_attention_layer(
             .sliding_window
             .map(|w| pos.saturating_sub(w.saturating_sub(1)))
             .unwrap_or(0);
-        for head in 0..config.n_heads {
-            let kv_head = head / group_size;
-            let q_start = pos * q_dim + head * head_dim;
-            let q = &q_data[q_start..q_start + head_dim];
+        let out_row = &mut attn_out[pos * q_dim..(pos + 1) * q_dim];
+        out_row.par_chunks_mut(head_dim).enumerate().try_for_each(
+            |(head, out)| -> Result<(), EngineError> {
+                let kv_head = head / group_size;
+                let q_start = pos * q_dim + head * head_dim;
+                let q = &q_data[q_start..q_start + head_dim];
 
-            let mut scores = vec![f32::NEG_INFINITY; pos + 1];
-            for j in j_min..=pos {
-                let mut dot = 0.0f32;
-                if borrow_src.is_some() {
-                    let k_vec = kv_caches[src_idx].get_k_slice(j, kv_head)?;
-                    for d in 0..head_dim {
-                        dot += q[d] * k_vec[d];
+                let mut scores = vec![f32::NEG_INFINITY; pos + 1];
+                for j in j_min..=pos {
+                    let mut dot = 0.0f32;
+                    if borrow_src.is_some() {
+                        let k_vec = kv_caches[src_idx].get_k_slice(j, kv_head)?;
+                        for d in 0..head_dim {
+                            dot += q[d] * k_vec[d];
+                        }
+                    } else {
+                        let k_start = j * kv_dim + kv_head * head_dim;
+                        let k = &k_data[k_start..k_start + head_dim];
+                        for d in 0..head_dim {
+                            dot += q[d] * k[d];
+                        }
                     }
-                } else {
-                    let k_start = j * kv_dim + kv_head * head_dim;
-                    let k = &k_data[k_start..k_start + head_dim];
-                    for d in 0..head_dim {
-                        dot += q[d] * k[d];
+                    scores[j] = dot * scale;
+                }
+
+                let mut weights_buf = vec![0.0f32; pos + 1];
+                softmax(&scores, &mut weights_buf)?;
+
+                for j in j_min..=pos {
+                    let w = weights_buf[j];
+                    if borrow_src.is_some() {
+                        let v_vec = kv_caches[src_idx].get_v_slice(j, kv_head)?;
+                        for d in 0..head_dim {
+                            out[d] += w * v_vec[d];
+                        }
+                    } else {
+                        let v_start = j * kv_dim + kv_head * head_dim;
+                        let v = &v_data[v_start..v_start + head_dim];
+                        for d in 0..head_dim {
+                            out[d] += w * v[d];
+                        }
                     }
                 }
-                scores[j] = dot * scale;
-            }
-
-            let mut weights_buf = vec![0.0f32; pos + 1];
-            softmax(&scores, &mut weights_buf)?;
-
-            let out_start = pos * q_dim + head * head_dim;
-            let out = &mut attn_out[out_start..out_start + head_dim];
-            for j in j_min..=pos {
-                let w = weights_buf[j];
-                if borrow_src.is_some() {
-                    let v_vec = kv_caches[src_idx].get_v_slice(j, kv_head)?;
-                    for d in 0..head_dim {
-                        out[d] += w * v_vec[d];
-                    }
-                } else {
-                    let v_start = j * kv_dim + kv_head * head_dim;
-                    let v = &v_data[v_start..v_start + head_dim];
-                    for d in 0..head_dim {
-                        out[d] += w * v[d];
-                    }
-                }
-            }
-        }
+                Ok(())
+            },
+        )?;
     }
 
     let attn_tensor = tensor_from_f32_slice(&attn_out, vec![seq_len, q_dim]);
@@ -614,33 +617,35 @@ pub fn decode_attention_layer(
         ModelFamily::MistralLlama => 1.0f32 / (head_dim as f32).sqrt(),
     };
 
-    for head in 0..config.n_heads {
-        let kv_head = head / group_size;
-        let q_start = head * head_dim;
-        let q = &q_data[q_start..q_start + head_dim];
+    attn_out.par_chunks_mut(head_dim).enumerate().try_for_each(
+        |(head, out)| -> Result<(), EngineError> {
+            let kv_head = head / group_size;
+            let q_start = head * head_dim;
+            let q = &q_data[q_start..q_start + head_dim];
 
-        let mut scores = vec![f32::NEG_INFINITY; total_pos];
-        for j in j_min..total_pos {
-            let k_vec = kv_caches[src_idx].get_k_slice(j, kv_head)?;
-            let mut dot = 0.0f32;
-            for d in 0..head_dim {
-                dot += q[d] * k_vec[d];
+            let mut scores = vec![f32::NEG_INFINITY; total_pos];
+            for j in j_min..total_pos {
+                let k_vec = kv_caches[src_idx].get_k_slice(j, kv_head)?;
+                let mut dot = 0.0f32;
+                for d in 0..head_dim {
+                    dot += q[d] * k_vec[d];
+                }
+                scores[j] = dot * scale;
             }
-            scores[j] = dot * scale;
-        }
 
-        let mut weights_buf = vec![0.0f32; total_pos];
-        softmax(&scores, &mut weights_buf)?;
+            let mut weights_buf = vec![0.0f32; total_pos];
+            softmax(&scores, &mut weights_buf)?;
 
-        let out = &mut attn_out[head * head_dim..(head + 1) * head_dim];
-        for j in j_min..total_pos {
-            let w = weights_buf[j];
-            let v_vec = kv_caches[src_idx].get_v_slice(j, kv_head)?;
-            for d in 0..head_dim {
-                out[d] += w * v_vec[d];
+            for j in j_min..total_pos {
+                let w = weights_buf[j];
+                let v_vec = kv_caches[src_idx].get_v_slice(j, kv_head)?;
+                for d in 0..head_dim {
+                    out[d] += w * v_vec[d];
+                }
             }
-        }
-    }
+            Ok(())
+        },
+    )?;
 
     let attn_tensor = tensor_from_f32_slice(&attn_out, vec![1, q_dim]);
     let mut projected = empty_f32_tensor(vec![1, hidden_dim]);

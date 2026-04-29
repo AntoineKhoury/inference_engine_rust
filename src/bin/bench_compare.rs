@@ -60,6 +60,10 @@ struct Cli {
     #[arg(long, default_value = "llama-completion")]
     llama_completion_bin: PathBuf,
 
+    /// Number of benchmark repetitions per command (minimum 5).
+    #[arg(long, default_value_t = 5)]
+    runs: usize,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -212,8 +216,80 @@ fn print_decode_human(m: &DecodeThroughputMetrics) {
     println!("  prefill_tokens_per_s: {pps:.3}  (rough pp analog)");
 }
 
+fn median(values: &mut [f64]) -> f64 {
+    values.sort_by(|a, b| a.total_cmp(b));
+    let len = values.len();
+    if len == 0 {
+        return 0.0;
+    }
+    if len % 2 == 1 {
+        values[len / 2]
+    } else {
+        (values[len / 2 - 1] + values[len / 2]) / 2.0
+    }
+}
+
+fn percentile(mut values: Vec<f64>, p: f64) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    values.sort_by(|a, b| a.total_cmp(b));
+    let rank = ((values.len() - 1) as f64 * p).round() as usize;
+    values[rank]
+}
+
+fn summarize_interactive(
+    runs: &[InteractiveTtftMetrics],
+) -> Result<serde_json::Value, EngineError> {
+    if runs.is_empty() {
+        return Err(EngineError::Model("interactive runs are empty".into()));
+    }
+    let mut ttft: Vec<f64> = runs.iter().map(|m| m.ttft_infer_ms).collect();
+    let mut prompt_eval: Vec<f64> = runs.iter().map(|m| m.prompt_eval_ms).collect();
+    Ok(serde_json::json!({
+        "runs": runs.len(),
+        "ttft_infer_ms": {
+            "median": median(&mut ttft),
+            "min": ttft.iter().copied().fold(f64::INFINITY, f64::min),
+            "max": ttft.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+        },
+        "prompt_eval_ms": {
+            "median": median(&mut prompt_eval),
+            "min": prompt_eval.iter().copied().fold(f64::INFINITY, f64::min),
+            "max": prompt_eval.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+        }
+    }))
+}
+
+fn summarize_decode(runs: &[DecodeThroughputMetrics]) -> Result<serde_json::Value, EngineError> {
+    if runs.is_empty() {
+        return Err(EngineError::Model("decode runs are empty".into()));
+    }
+    let mut tps: Vec<f64> = runs.iter().map(|m| m.decode_tokens_per_sec).collect();
+    let mut elapsed: Vec<f64> = runs.iter().map(|m| m.decode_elapsed_ms).collect();
+    Ok(serde_json::json!({
+        "runs": runs.len(),
+        "decode_tokens_per_sec": {
+            "median": median(&mut tps),
+            "p95": percentile(tps.clone(), 0.95),
+            "min": tps.iter().copied().fold(f64::INFINITY, f64::min),
+            "max": tps.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+        },
+        "decode_elapsed_ms": {
+            "median": median(&mut elapsed),
+            "min": elapsed.iter().copied().fold(f64::INFINITY, f64::min),
+            "max": elapsed.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+        }
+    }))
+}
+
 fn main() -> Result<(), EngineError> {
     let cli = Cli::parse();
+    if cli.runs < 5 {
+        return Err(EngineError::Model(
+            "--runs must be at least 5 for stable comparisons".into(),
+        ));
+    }
 
     if cli.compare_llama && !matches!(cli.command, Commands::InteractiveTtft) {
         eprintln!(
@@ -223,10 +299,19 @@ fn main() -> Result<(), EngineError> {
 
     match cli.command {
         Commands::All { decode_tokens } => {
-            let m = run_all(&cli.model, &cli.tokenizer, &cli.prompt, decode_tokens)?;
-            check_cold(&m.cold)?;
-            check_interactive(&m.interactive)?;
-            check_decode(&m.decode, cli.min_decode_tps)?;
+            let mut runs = Vec::with_capacity(cli.runs);
+            for _ in 0..cli.runs {
+                let m = run_all(&cli.model, &cli.tokenizer, &cli.prompt, decode_tokens)?;
+                check_cold(&m.cold)?;
+                check_interactive(&m.interactive)?;
+                check_decode(&m.decode, cli.min_decode_tps)?;
+                runs.push(m);
+            }
+            let cold_runs: Vec<ColdStartMetrics> = runs.iter().map(|m| m.cold.clone()).collect();
+            let interactive_runs: Vec<InteractiveTtftMetrics> =
+                runs.iter().map(|m| m.interactive.clone()).collect();
+            let decode_runs: Vec<DecodeThroughputMetrics> =
+                runs.iter().map(|m| m.decode.clone()).collect();
             if cli.json {
                 println!(
                     "{}",
@@ -235,20 +320,39 @@ fn main() -> Result<(), EngineError> {
                         "model": cli.model,
                         "tokenizer": cli.tokenizer,
                         "prompt": cli.prompt,
-                        "metrics": m,
+                        "runs": {
+                            "cold": &cold_runs,
+                            "interactive": &interactive_runs,
+                            "decode": &decode_runs,
+                        },
+                        "summary": {
+                            "interactive": summarize_interactive(&runs.iter().map(|m| m.interactive.clone()).collect::<Vec<_>>())?,
+                            "decode": summarize_decode(&runs.iter().map(|m| m.decode.clone()).collect::<Vec<_>>())?,
+                        }
                     })
                 );
             } else {
-                print_cold_human(&m.cold);
+                let first = &runs[0];
+                print_cold_human(&first.cold);
                 println!();
-                print_interactive_human(&m.interactive, None);
+                print_interactive_human(&first.interactive, None);
                 println!();
-                print_decode_human(&m.decode);
+                print_decode_human(&first.decode);
+                let summary_i = summarize_interactive(&interactive_runs)?;
+                let summary_d = summarize_decode(&decode_runs)?;
+                println!();
+                println!("=== summary over {} runs ===", cli.runs);
+                println!("  interactive: {}", summary_i);
+                println!("  decode:      {}", summary_d);
             }
         }
         Commands::ColdStart => {
-            let (cold, _bench) = run_cold_start(&cli.model, &cli.tokenizer, &cli.prompt)?;
-            check_cold(&cold)?;
+            let mut runs = Vec::with_capacity(cli.runs);
+            for _ in 0..cli.runs {
+                let (cold, _bench) = run_cold_start(&cli.model, &cli.tokenizer, &cli.prompt)?;
+                check_cold(&cold)?;
+                runs.push(cold);
+            }
             if cli.json {
                 println!(
                     "{}",
@@ -257,31 +361,47 @@ fn main() -> Result<(), EngineError> {
                         "model": cli.model,
                         "tokenizer": cli.tokenizer,
                         "prompt": cli.prompt,
-                        "metrics": cold,
+                        "runs": &runs,
                     })
                 );
             } else {
-                print_cold_human(&cold);
+                print_cold_human(&runs[0]);
+                println!("  (showing run 1 of {}; use --json for all runs)", cli.runs);
             }
             if cli.min_decode_tps.is_some() {
                 eprintln!("warning: --min-decode-tps ignored for cold-start");
             }
         }
         Commands::InteractiveTtft => {
-            let mut bench = EngineBench::load(&cli.model, &cli.tokenizer)?;
-            let m = bench.run_interactive_ttft(&cli.prompt)?;
-            check_interactive(&m)?;
-            let llama = if cli.compare_llama {
-                Some(run_llama_completion_ttft_ref(
-                    &cli.llama_completion_bin,
-                    &cli.model,
-                    &cli.prompt,
-                )?)
-            } else {
-                None
-            };
+            let mut runs = Vec::with_capacity(cli.runs);
+            let mut llama_runs: Vec<LlamaCompletionTtftRef> = Vec::new();
+            let mut ratio_runs: Vec<f64> = Vec::new();
+            for _ in 0..cli.runs {
+                let mut bench = EngineBench::load(&cli.model, &cli.tokenizer)?;
+                let m = bench.run_interactive_ttft(&cli.prompt)?;
+                check_interactive(&m)?;
+                if cli.compare_llama {
+                    let l = run_llama_completion_ttft_ref(
+                        &cli.llama_completion_bin,
+                        &cli.model,
+                        &cli.prompt,
+                    )?;
+                    ratio_runs.push(m.ttft_infer_ms / l.prompt_eval_ms);
+                    llama_runs.push(l);
+                }
+                runs.push(m);
+            }
             if cli.json {
-                let ratio = llama.as_ref().map(|l| m.ttft_infer_ms / l.prompt_eval_ms);
+                let ratio_summary = if ratio_runs.is_empty() {
+                    None
+                } else {
+                    let mut r = ratio_runs.clone();
+                    Some(serde_json::json!({
+                        "median": median(&mut r),
+                        "min": r.iter().copied().fold(f64::INFINITY, f64::min),
+                        "max": r.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+                    }))
+                };
                 println!(
                     "{}",
                     serde_json::json!({
@@ -289,22 +409,40 @@ fn main() -> Result<(), EngineError> {
                         "model": cli.model,
                         "tokenizer": cli.tokenizer,
                         "prompt": cli.prompt,
-                        "metrics": m,
-                        "llama_completion": llama,
-                        "ratio_ttft_infer": ratio,
+                        "runs": &runs,
+                        "summary": summarize_interactive(&runs)?,
+                        "llama_completion_runs": &llama_runs,
+                        "ratio_ttft_infer_summary": ratio_summary,
                     })
                 );
             } else {
-                print_interactive_human(&m, llama.as_ref());
+                print_interactive_human(&runs[0], llama_runs.first());
+                let summary = summarize_interactive(&runs)?;
+                println!();
+                println!("=== summary over {} runs ===", cli.runs);
+                println!("  interactive: {}", summary);
+                if !ratio_runs.is_empty() {
+                    let mut r = ratio_runs.clone();
+                    println!(
+                        "  ratio_ttft_infer (rust/llama): median {:.2}, min {:.2}, max {:.2}",
+                        median(&mut r),
+                        r.iter().copied().fold(f64::INFINITY, f64::min),
+                        r.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+                    );
+                }
             }
             if cli.min_decode_tps.is_some() {
                 eprintln!("warning: --min-decode-tps ignored for interactive-ttft");
             }
         }
         Commands::DecodeThroughput { decode_tokens } => {
-            let mut bench = EngineBench::load(&cli.model, &cli.tokenizer)?;
-            let m = bench.run_decode_throughput(&cli.prompt, decode_tokens)?;
-            check_decode(&m, cli.min_decode_tps)?;
+            let mut runs = Vec::with_capacity(cli.runs);
+            for _ in 0..cli.runs {
+                let mut bench = EngineBench::load(&cli.model, &cli.tokenizer)?;
+                let m = bench.run_decode_throughput(&cli.prompt, decode_tokens)?;
+                check_decode(&m, cli.min_decode_tps)?;
+                runs.push(m);
+            }
             if cli.json {
                 println!(
                     "{}",
@@ -313,11 +451,16 @@ fn main() -> Result<(), EngineError> {
                         "model": cli.model,
                         "tokenizer": cli.tokenizer,
                         "prompt": cli.prompt,
-                        "metrics": m,
+                        "runs": &runs,
+                        "summary": summarize_decode(&runs)?,
                     })
                 );
             } else {
-                print_decode_human(&m);
+                print_decode_human(&runs[0]);
+                let summary = summarize_decode(&runs)?;
+                println!();
+                println!("=== summary over {} runs ===", cli.runs);
+                println!("  decode: {}", summary);
             }
         }
     }

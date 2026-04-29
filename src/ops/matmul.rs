@@ -8,8 +8,12 @@ use crate::ops::quant::quant_k_handler::{
     Q4K_BLOCK_SIZE, Q6K_BLOCK_SIZE, Q8_0_BLOCK_ELEMENTS, Q8_0_BLOCK_SIZE, dequantize_q4k_block,
     dequantize_q6k_block, dequantize_q8_0_block,
 };
+use rayon::prelude::*;
 
 const BLOCK_ELEMENTS: usize = 256;
+
+// Derived heuristic on minimum number of ops needed for threading to prove useful. Should be further finetuned
+const PARALLEL_MATMUL_MIN_OPS: usize = 64 * 1024;
 
 pub fn matmul(a: &Tensor, b: &Tensor, output: &mut Tensor) -> Result<(), EngineError> {
     // Validate dimensions
@@ -76,17 +80,38 @@ fn matmul_f32_f32(input: &Tensor, weight: &Tensor, output: &mut Tensor) -> Resul
     let weight_data = weight.as_f32_slice()?;
     let output_data = output.as_f32_slice_mut()?;
 
-    for row in 0..m {
-        let input_row_start = row * k;
-        let output_row_start = row * n;
-        for col in 0..n {
-            let mut acc = 0.0f32;
-            for kk in 0..k {
-                let a = input_data[input_row_start + kk];
-                let w = weight_data[kk + col * k];
-                acc += a * w;
+    // Saturating here prevents overflow, and forces this product to be at most the max possible for usize
+    let ops = m.saturating_mul(n).saturating_mul(k);
+
+    if ops >= PARALLEL_MATMUL_MIN_OPS {
+        output_data
+            .par_chunks_mut(n)
+            .enumerate()
+            .for_each(|(row, out_row)| {
+                let input_row_start = row * k;
+                for (col, out_cell) in out_row.iter_mut().enumerate() {
+                    let mut acc = 0.0f32;
+                    for kk in 0..k {
+                        let a = input_data[input_row_start + kk];
+                        let w = weight_data[kk + col * k];
+                        acc += a * w;
+                    }
+                    *out_cell = acc;
+                }
+            });
+    } else {
+        for row in 0..m {
+            let input_row_start = row * k;
+            let output_row_start = row * n;
+            for col in 0..n {
+                let mut acc = 0.0f32;
+                for kk in 0..k {
+                    let a = input_data[input_row_start + kk];
+                    let w = weight_data[kk + col * k];
+                    acc += a * w;
+                }
+                output_data[output_row_start + col] = acc;
             }
-            output_data[output_row_start + col] = acc;
         }
     }
 
@@ -147,16 +172,12 @@ fn matmul_f32_q4k(input: &Tensor, weight: &Tensor, output: &mut Tensor) -> Resul
         ));
     }
 
-    let mut decoded_block = [0.0f32; BLOCK_ELEMENTS];
-    let mut current_block_idx = usize::MAX;
-
-    for row in 0..m {
+    let ops = m.saturating_mul(n).saturating_mul(k);
+    let row_kernel = |(row, out_row): (usize, &mut [f32])| -> Result<(), EngineError> {
         let input_row_start = row * k;
-        let output_row_start = row * n;
-
-        // `col` outer, `kk` inner: `weight_idx = kk + col * k` runs contiguous in `kk` (stride-1 in ggml
-        // buffer). The old `kk` outer loop stepped by `k` in `col` and was catastrophically slow on CPU.
-        for col in 0..n {
+        let mut decoded_block = [0.0f32; BLOCK_ELEMENTS];
+        let mut current_block_idx = usize::MAX;
+        for (col, out_cell) in out_row.iter_mut().enumerate() {
             let mut acc = 0.0f32;
             for kk in 0..k {
                 let a = input_data[input_row_start + kk];
@@ -177,8 +198,21 @@ fn matmul_f32_q4k(input: &Tensor, weight: &Tensor, output: &mut Tensor) -> Resul
                 let w = decoded_block[weight_idx % BLOCK_ELEMENTS];
                 acc += a * w;
             }
-            output_data[output_row_start + col] = acc;
+            *out_cell = acc;
         }
+        Ok(())
+    };
+
+    if ops >= PARALLEL_MATMUL_MIN_OPS {
+        output_data
+            .par_chunks_mut(n)
+            .enumerate()
+            .try_for_each(row_kernel)?;
+    } else {
+        output_data
+            .chunks_mut(n)
+            .enumerate()
+            .try_for_each(row_kernel)?;
     }
 
     Ok(())
@@ -235,14 +269,12 @@ fn matmul_f32_q8_0(
         ));
     }
 
-    let mut decoded_block = [0.0f32; Q8_0_BLOCK_ELEMENTS];
-    let mut current_block_idx = usize::MAX;
-
-    for row in 0..m {
+    let ops = m.saturating_mul(n).saturating_mul(k);
+    let row_kernel = |(row, out_row): (usize, &mut [f32])| -> Result<(), EngineError> {
         let input_row_start = row * k;
-        let output_row_start = row * n;
-
-        for col in 0..n {
+        let mut decoded_block = [0.0f32; Q8_0_BLOCK_ELEMENTS];
+        let mut current_block_idx = usize::MAX;
+        for (col, out_cell) in out_row.iter_mut().enumerate() {
             let mut acc = 0.0f32;
             for kk in 0..k {
                 let a = input_data[input_row_start + kk];
@@ -263,8 +295,21 @@ fn matmul_f32_q8_0(
                 let w = decoded_block[weight_idx % Q8_0_BLOCK_ELEMENTS];
                 acc += a * w;
             }
-            output_data[output_row_start + col] = acc;
+            *out_cell = acc;
         }
+        Ok(())
+    };
+
+    if ops >= PARALLEL_MATMUL_MIN_OPS {
+        output_data
+            .par_chunks_mut(n)
+            .enumerate()
+            .try_for_each(row_kernel)?;
+    } else {
+        output_data
+            .chunks_mut(n)
+            .enumerate()
+            .try_for_each(row_kernel)?;
     }
 
     Ok(())
@@ -323,14 +368,12 @@ fn matmul_f32_q6k(input: &Tensor, weight: &Tensor, output: &mut Tensor) -> Resul
         ));
     }
 
-    let mut decoded_block = [0.0f32; BLOCK_ELEMENTS];
-    let mut current_block_idx = usize::MAX;
-
-    for row in 0..m {
+    let ops = m.saturating_mul(n).saturating_mul(k);
+    let row_kernel = |(row, out_row): (usize, &mut [f32])| -> Result<(), EngineError> {
         let input_row_start = row * k;
-        let output_row_start = row * n;
-
-        for col in 0..n {
+        let mut decoded_block = [0.0f32; BLOCK_ELEMENTS];
+        let mut current_block_idx = usize::MAX;
+        for (col, out_cell) in out_row.iter_mut().enumerate() {
             let mut acc = 0.0f32;
             for kk in 0..k {
                 let a = input_data[input_row_start + kk];
@@ -351,8 +394,21 @@ fn matmul_f32_q6k(input: &Tensor, weight: &Tensor, output: &mut Tensor) -> Resul
                 let w = decoded_block[weight_idx % BLOCK_ELEMENTS];
                 acc += a * w;
             }
-            output_data[output_row_start + col] = acc;
+            *out_cell = acc;
         }
+        Ok(())
+    };
+
+    if ops >= PARALLEL_MATMUL_MIN_OPS {
+        output_data
+            .par_chunks_mut(n)
+            .enumerate()
+            .try_for_each(row_kernel)?;
+    } else {
+        output_data
+            .chunks_mut(n)
+            .enumerate()
+            .try_for_each(row_kernel)?;
     }
 
     Ok(())

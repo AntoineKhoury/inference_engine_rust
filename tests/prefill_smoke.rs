@@ -7,9 +7,13 @@ use inference_engine_rust::model_config::ModelConfig;
 use inference_engine_rust::model_loader::file_loader::read_file;
 use inference_engine_rust::model_weights::{ModelWeightNames, ModelWeights};
 
+use inference_engine_rust::engine::embed::{
+    prefill_from_tokens, prefill_state_for_single_token_loaded,
+};
+use inference_engine_rust::engine::runtime::{
+    decode_forward, final_logits_last_token, prefill_forward,
+};
 use inference_engine_rust::layers::embeddings::lookup_embeddings;
-use inference_engine_rust::engine::embed::{prefill_from_tokens, prefill_state_for_single_token_loaded};
-use inference_engine_rust::engine::runtime::{decode_forward, final_logits_last_token, prefill_forward};
 
 const MODEL_PATH: &str = common::REFERENCE_MODEL_REL_PATH;
 

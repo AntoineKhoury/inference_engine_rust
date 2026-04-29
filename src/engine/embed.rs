@@ -32,13 +32,18 @@ pub fn prefill_from_tokens(
     let mut embeddings = lookup_embeddings(gguf, file_path, token_ids)?;
     scale_embeddings(&mut embeddings, config.token_embedding_scale);
 
-    let per_layer =
-        if config.family == ModelFamily::Gemma4 && config.embedding_length_per_layer > 0 {
-            let ple = weights_gemma4_ple_tensors(gguf, file_path, config)?;
-            Some(compute_packed_per_layer_inputs(&ple, config, token_ids, &embeddings)?)
-        } else {
-            None
-        };
+    let per_layer = if config.family == ModelFamily::Gemma4 && config.embedding_length_per_layer > 0
+    {
+        let ple = weights_gemma4_ple_tensors(gguf, file_path, config)?;
+        Some(compute_packed_per_layer_inputs(
+            &ple,
+            config,
+            token_ids,
+            &embeddings,
+        )?)
+    } else {
+        None
+    };
 
     let (packed, pl, pd) = unpack_ple(per_layer, config);
     ForwardState::from_embeddings_inner(embeddings, config.hidden_dim, packed, pl, pd)
@@ -50,42 +55,43 @@ pub fn prefill_state_for_single_token_loaded(
     config: &ModelConfig,
     token_id: u32,
 ) -> Result<ForwardState, EngineError> {
-    let mut embeddings =
-        crate::layers::embeddings::lookup_embeddings_loaded(gguf, &[token_id])?;
+    let mut embeddings = crate::layers::embeddings::lookup_embeddings_loaded(gguf, &[token_id])?;
     scale_embeddings(&mut embeddings, config.token_embedding_scale);
 
-    let per_layer =
-        if config.family == ModelFamily::Gemma4 && config.embedding_length_per_layer > 0 {
-            let ple = crate::model_weights::Gemma4PleTensors {
-                per_layer_token_embd: gguf
-                    .get_tensor("per_layer_token_embd.weight")
-                    .ok_or_else(|| {
-                        EngineError::Model(
-                            "per_layer_token_embd.weight must be loaded for Gemma 4 PLE decode"
-                                .into(),
-                        )
-                    })?,
-                per_layer_model_proj: gguf
-                    .get_tensor("per_layer_model_proj.weight")
-                    .ok_or_else(|| {
-                        EngineError::Model(
-                            "per_layer_model_proj.weight must be loaded for Gemma 4 PLE decode"
-                                .into(),
-                        )
-                    })?,
-                per_layer_proj_norm: gguf
-                    .get_tensor("per_layer_proj_norm.weight")
-                    .ok_or_else(|| {
-                        EngineError::Model(
-                            "per_layer_proj_norm.weight must be loaded for Gemma 4 PLE decode"
-                                .into(),
-                        )
-                    })?,
-            };
-            Some(compute_packed_per_layer_inputs(&ple, config, &[token_id], &embeddings)?)
-        } else {
-            None
+    let per_layer = if config.family == ModelFamily::Gemma4 && config.embedding_length_per_layer > 0
+    {
+        let ple = crate::model_weights::Gemma4PleTensors {
+            per_layer_token_embd: gguf.get_tensor("per_layer_token_embd.weight").ok_or_else(
+                || {
+                    EngineError::Model(
+                        "per_layer_token_embd.weight must be loaded for Gemma 4 PLE decode".into(),
+                    )
+                },
+            )?,
+            per_layer_model_proj: gguf.get_tensor("per_layer_model_proj.weight").ok_or_else(
+                || {
+                    EngineError::Model(
+                        "per_layer_model_proj.weight must be loaded for Gemma 4 PLE decode".into(),
+                    )
+                },
+            )?,
+            per_layer_proj_norm: gguf.get_tensor("per_layer_proj_norm.weight").ok_or_else(
+                || {
+                    EngineError::Model(
+                        "per_layer_proj_norm.weight must be loaded for Gemma 4 PLE decode".into(),
+                    )
+                },
+            )?,
         };
+        Some(compute_packed_per_layer_inputs(
+            &ple,
+            config,
+            &[token_id],
+            &embeddings,
+        )?)
+    } else {
+        None
+    };
 
     let (packed, pl, pd) = unpack_ple(per_layer, config);
     ForwardState::from_embeddings_inner(embeddings, config.hidden_dim, packed, pl, pd)
@@ -111,17 +117,21 @@ pub fn prefill_from_tokens_loaded(
         )));
     }
 
-    let mut embeddings =
-        crate::layers::embeddings::lookup_embeddings_loaded(gguf, token_ids)?;
+    let mut embeddings = crate::layers::embeddings::lookup_embeddings_loaded(gguf, token_ids)?;
     scale_embeddings(&mut embeddings, config.token_embedding_scale);
 
-    let per_layer =
-        if config.family == ModelFamily::Gemma4 && config.embedding_length_per_layer > 0 {
-            let ple = gemma4_ple_tensors_loaded(gguf, config)?;
-            Some(compute_packed_per_layer_inputs(&ple, config, token_ids, &embeddings)?)
-        } else {
-            None
-        };
+    let per_layer = if config.family == ModelFamily::Gemma4 && config.embedding_length_per_layer > 0
+    {
+        let ple = gemma4_ple_tensors_loaded(gguf, config)?;
+        Some(compute_packed_per_layer_inputs(
+            &ple,
+            config,
+            token_ids,
+            &embeddings,
+        )?)
+    } else {
+        None
+    };
 
     let (packed, pl, pd) = unpack_ple(per_layer, config);
     ForwardState::from_embeddings_inner(embeddings, config.hidden_dim, packed, pl, pd)
@@ -158,19 +168,13 @@ fn gemma4_ple_tensors_loaded<'a>(
     Ok(Gemma4PleTensors {
         per_layer_token_embd: gguf
             .get_tensor("per_layer_token_embd.weight")
-            .ok_or_else(|| {
-                EngineError::Model("per_layer_token_embd.weight not loaded".into())
-            })?,
+            .ok_or_else(|| EngineError::Model("per_layer_token_embd.weight not loaded".into()))?,
         per_layer_model_proj: gguf
             .get_tensor("per_layer_model_proj.weight")
-            .ok_or_else(|| {
-                EngineError::Model("per_layer_model_proj.weight not loaded".into())
-            })?,
+            .ok_or_else(|| EngineError::Model("per_layer_model_proj.weight not loaded".into()))?,
         per_layer_proj_norm: gguf
             .get_tensor("per_layer_proj_norm.weight")
-            .ok_or_else(|| {
-                EngineError::Model("per_layer_proj_norm.weight not loaded".into())
-            })?,
+            .ok_or_else(|| EngineError::Model("per_layer_proj_norm.weight not loaded".into()))?,
     })
 }
 

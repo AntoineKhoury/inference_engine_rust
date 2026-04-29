@@ -431,6 +431,7 @@ dependencies = [
  "env_logger",
  "log",
  "rand 0.8.5",
+ "rayon",
  "sentencepiece",
  "serde",
  "serde_json",
