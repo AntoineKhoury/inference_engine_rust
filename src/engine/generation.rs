@@ -1,7 +1,7 @@
 use crate::EngineError;
-use crate::prefill::PrefillState;
-use crate::sampling::sample_greedy;
-use crate::session::InferenceSession;
+use crate::engine::sampling::sample_greedy;
+use crate::engine::session::InferenceSession;
+use crate::engine::state::ForwardState;
 
 /// Choose the next token greedily from the session's last-token logits.
 ///
@@ -9,7 +9,7 @@ use crate::session::InferenceSession;
 /// stop criteria, streaming, and text postprocessing.
 pub fn greedy_next_token(
     session: &InferenceSession<'_>,
-    state: &PrefillState,
+    state: &ForwardState,
 ) -> Result<u32, EngineError> {
     let logits = session.logits_last_token(state)?;
     sample_greedy(&logits).map_err(EngineError::from)

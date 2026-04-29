@@ -20,8 +20,8 @@ use crate::loaded_model::LoadedModel;
 use crate::model_config::{ModelConfig, TokenizerPromptConfig};
 use crate::model_loader::file_loader::read_file;
 use crate::model_weights::ModelWeightNames;
-use crate::prefill::prefill_from_tokens_loaded;
-use crate::session::InferenceSession;
+use crate::engine::embed::prefill_from_tokens_loaded;
+use crate::engine::session::InferenceSession;
 use crate::tokenizer::Tokenizer;
 
 /// Default prompt (matches `tests/generate_smoke.rs`).
@@ -136,7 +136,7 @@ impl EngineBench {
         let prompt_eval_ms = ms(t_pf0.elapsed());
 
         let t_tok0 = Instant::now();
-        let _first_id = crate::generation::greedy_next_token(&session, &state)?;
+        let _first_id = crate::engine::generation::greedy_next_token(&session, &state)?;
         let lm_head_sample_ms = ms(t_tok0.elapsed());
 
         let ttft_infer_ms = prefill_prepare_ms + prompt_eval_ms + lm_head_sample_ms;
@@ -177,7 +177,7 @@ impl EngineBench {
 
         let t_dec0 = Instant::now();
         for _ in 0..decode_tokens {
-            let next_id = crate::generation::greedy_next_token(&session, &state)?;
+            let next_id = crate::engine::generation::greedy_next_token(&session, &state)?;
             state = session.decode_token(next_id)?;
         }
         let decode_elapsed_ms = ms(t_dec0.elapsed());
@@ -267,7 +267,7 @@ pub fn run_cold_start(
         let prompt_eval_ms = ms(t0.elapsed());
 
         let t0 = Instant::now();
-        let _first_id = crate::generation::greedy_next_token(&session, &state)?;
+        let _first_id = crate::engine::generation::greedy_next_token(&session, &state)?;
         let lm_head_sample_ms = ms(t0.elapsed());
 
         (prompt_eval_ms, lm_head_sample_ms)

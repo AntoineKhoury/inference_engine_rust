@@ -2,21 +2,21 @@ use std::sync::Arc;
 
 use crate::EngineError;
 use crate::core::tensor::{Tensor, TensorType};
+use crate::engine::state::ForwardState;
 use crate::layers::attention::KVCache;
-use crate::layers::prefill_block::{decode_layer_block, prefill_layer_block};
+use crate::layers::block::{decode_layer_block, prefill_layer_block};
 use crate::model_config::ModelConfig;
 use crate::model_weights::ModelWeights;
 use crate::ops::matmul::matmul;
 use crate::ops::rmsnorm::rmsnorm;
-use crate::prefill::PrefillState;
 
 /// Run the transformer stack over prompt activations and populate KV caches.
 pub fn prefill_forward(
-    input: &PrefillState,
+    input: &ForwardState,
     config: &ModelConfig,
     weights: &ModelWeights,
     kv_caches: &mut [KVCache],
-) -> Result<PrefillState, EngineError> {
+) -> Result<ForwardState, EngineError> {
     if kv_caches.len() != weights.layers.len() {
         return Err(EngineError::Model(
             "prefill_forward: kv_caches len != number of layers".into(),
@@ -35,11 +35,11 @@ pub fn prefill_forward(
 /// One autoregressive step: `input` must be a single token (`seq_len == 1`). Each layer appends
 /// K/V to the corresponding cache; RoPE position is the cache length **before** this step.
 pub fn decode_forward(
-    input: &PrefillState,
+    input: &ForwardState,
     config: &ModelConfig,
     weights: &ModelWeights,
     kv_caches: &mut [KVCache],
-) -> Result<PrefillState, EngineError> {
+) -> Result<ForwardState, EngineError> {
     if input.seq_len() != 1 {
         return Err(EngineError::Model(
             "decode_forward: seq_len must be 1".into(),
@@ -61,19 +61,20 @@ pub fn decode_forward(
 }
 
 /// Run [`decode_forward`] from a single-token embedding row (length `config.hidden_dim`).
-/// Prefer [`crate::prefill::prefill_state_for_single_token_loaded`] for Gemma 4 so embeddings are scaled and PLE is populated.
+/// Prefer [`crate::engine::embed::prefill_state_for_single_token_loaded`] for Gemma 4 so
+/// embeddings are scaled and PLE is populated.
 pub fn decode_from_embedding_row(
     embedding_row: Vec<f32>,
     config: &ModelConfig,
     weights: &ModelWeights,
     kv_caches: &mut [KVCache],
-) -> Result<PrefillState, EngineError> {
-    let input = PrefillState::from_flat(embedding_row, 1, config.hidden_dim)?;
+) -> Result<ForwardState, EngineError> {
+    let input = ForwardState::from_flat(embedding_row, 1, config.hidden_dim)?;
     decode_forward(&input, config, weights, kv_caches)
 }
 
 pub fn final_logits_last_token(
-    input: &PrefillState,
+    input: &ForwardState,
     config: &ModelConfig,
     weights: &ModelWeights,
 ) -> Result<Vec<f32>, EngineError> {

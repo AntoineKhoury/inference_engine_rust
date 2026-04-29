@@ -9,7 +9,8 @@ use crate::ops::matmul::matmul;
 use crate::ops::rmsnorm::{rmsnorm, rmsnorm_inplace_no_scale};
 use crate::ops::rope::rope;
 use crate::ops::softmax::softmax;
-use crate::prefill::PrefillState;
+use crate::engine::state::ForwardState;
+use crate::ops::residual_add::residual_add;
 /// Per-layer KV cache: one `[head_dim]` slice per **KV head** per timestep (GQA/MQA).
 pub struct KVCache {
     k_cache: Vec<f32>,
@@ -171,7 +172,7 @@ pub fn unpack_llama_gguf_qk_row(row: &mut [f32], n_groups: usize, head_dim: usiz
 
 #[allow(clippy::needless_range_loop)]
 pub fn prefill_attention_layer(
-    input: &PrefillState,
+    input: &ForwardState,
     config: &ModelConfig,
     layer_dims: &LayerDims,
     layer_attn: &LayerAttentionSpec,
@@ -456,7 +457,7 @@ fn apply_optional_head_rmsnorm(
 /// Past keys/values are read from `kv_cache`; the new K/V are appended after RoPE.
 #[allow(clippy::needless_range_loop)]
 pub fn decode_attention_layer(
-    input: &PrefillState,
+    input: &ForwardState,
     config: &ModelConfig,
     layer_dims: &LayerDims,
     layer_attn: &LayerAttentionSpec,
@@ -679,4 +680,256 @@ mod unpack_tests {
         unpack_llama_gguf_qk_row(&mut row, 2, 4);
         assert_eq!(row, vec![0., 1., 2., 3., 4., 5., 6., 7.]);
     }
+}
+
+// ── Attention sub-layer with pre/post normalization ──────────────────────────
+//
+// These wrappers apply input RMSNorm, run the attention sub-layer, apply the
+// optional post-norm (Gemma 4 only), and add the residual connection.
+// They live here because they depend directly on the attention primitives above.
+
+pub fn prefill_attention_with_norm(
+    input: &ForwardState,
+    config: &ModelConfig,
+    layer_idx: usize,
+    weights: &crate::model_weights::LayerWeights,
+    kv_caches: &mut [KVCache],
+) -> Result<Vec<f32>, EngineError> {
+    match config.family {
+        ModelFamily::MistralLlama => {
+            mistral_prefill_attention_with_norm(input, config, layer_idx, weights, kv_caches)
+        }
+        ModelFamily::Gemma4 => {
+            gemma4_prefill_attention_with_norm(input, config, layer_idx, weights, kv_caches)
+        }
+    }
+}
+
+fn mistral_prefill_attention_with_norm(
+    input: &ForwardState,
+    config: &ModelConfig,
+    layer_idx: usize,
+    weights: &crate::model_weights::LayerWeights,
+    kv_caches: &mut [KVCache],
+) -> Result<Vec<f32>, EngineError> {
+    let seq_len = input.seq_len();
+    let hidden_dim = input.hidden_dim();
+
+    let attn_norm_weights = weights.attn_norm.as_f32_slice()?;
+    if attn_norm_weights.len() != hidden_dim {
+        return Err(EngineError::Model(format!(
+            "attn_norm weights len {} != hidden_dim {}",
+            attn_norm_weights.len(),
+            hidden_dim
+        )));
+    }
+
+    let mut normed = vec![0.0f32; seq_len * hidden_dim];
+    for pos in 0..seq_len {
+        let start = pos * hidden_dim;
+        let end = start + hidden_dim;
+        rmsnorm(
+            &input.hidden()[start..end],
+            attn_norm_weights,
+            config.rms_norm_eps,
+            &mut normed[start..end],
+        )?;
+    }
+
+    let normed_state = ForwardState::from_flat(normed, seq_len, hidden_dim)?;
+    let layer_attn = config.layer_attention_for(layer_idx)?;
+    let layer_dims = config.layer_dims_for(layer_idx)?;
+    let attn_out = prefill_attention_layer(
+        &normed_state,
+        config,
+        layer_dims,
+        layer_attn,
+        weights,
+        kv_caches,
+        layer_idx,
+    )?;
+
+    let mut residual_out = vec![0.0f32; seq_len * hidden_dim];
+    residual_add(input.hidden(), &attn_out, &mut residual_out)?;
+    Ok(residual_out)
+}
+
+fn gemma4_prefill_attention_with_norm(
+    input: &ForwardState,
+    config: &ModelConfig,
+    layer_idx: usize,
+    weights: &crate::model_weights::LayerWeights,
+    kv_caches: &mut [KVCache],
+) -> Result<Vec<f32>, EngineError> {
+    let seq_len = input.seq_len();
+    let hidden_dim = input.hidden_dim();
+
+    let attn_norm_weights = weights.attn_norm.as_f32_slice()?;
+    let post_attn_w = weights
+        .attn_post_norm
+        .ok_or_else(|| EngineError::Model("Gemma 4: missing post_attention_norm".into()))?
+        .as_f32_slice()?;
+    if attn_norm_weights.len() != hidden_dim || post_attn_w.len() != hidden_dim {
+        return Err(EngineError::Model(
+            "Gemma 4: attn norm weight length mismatch".into(),
+        ));
+    }
+
+    let mut normed = vec![0.0f32; seq_len * hidden_dim];
+    for pos in 0..seq_len {
+        let start = pos * hidden_dim;
+        let end = start + hidden_dim;
+        rmsnorm(
+            &input.hidden()[start..end],
+            attn_norm_weights,
+            config.rms_norm_eps,
+            &mut normed[start..end],
+        )?;
+    }
+
+    let normed_state = ForwardState::from_flat(normed, seq_len, hidden_dim)?;
+    let layer_attn = config.layer_attention_for(layer_idx)?;
+    let layer_dims = config.layer_dims_for(layer_idx)?;
+    let mut attn_out = prefill_attention_layer(
+        &normed_state,
+        config,
+        layer_dims,
+        layer_attn,
+        weights,
+        kv_caches,
+        layer_idx,
+    )?;
+
+    for pos in 0..seq_len {
+        let start = pos * hidden_dim;
+        let end = start + hidden_dim;
+        let mut tmp = vec![0.0f32; hidden_dim];
+        rmsnorm(
+            &attn_out[start..end],
+            post_attn_w,
+            config.rms_norm_eps,
+            &mut tmp,
+        )?;
+        attn_out[start..end].copy_from_slice(&tmp);
+    }
+
+    let mut residual_out = vec![0.0f32; seq_len * hidden_dim];
+    residual_add(input.hidden(), &attn_out, &mut residual_out)?;
+    Ok(residual_out)
+}
+
+pub fn decode_attention_with_norm(
+    input: &ForwardState,
+    config: &ModelConfig,
+    layer_idx: usize,
+    weights: &crate::model_weights::LayerWeights,
+    kv_caches: &mut [KVCache],
+) -> Result<Vec<f32>, EngineError> {
+    if input.seq_len() != 1 {
+        return Err(EngineError::Model(
+            "decode_attention_with_norm: seq_len must be 1".into(),
+        ));
+    }
+    match config.family {
+        ModelFamily::MistralLlama => {
+            mistral_decode_attention_with_norm(input, config, layer_idx, weights, kv_caches)
+        }
+        ModelFamily::Gemma4 => {
+            gemma4_decode_attention_with_norm(input, config, layer_idx, weights, kv_caches)
+        }
+    }
+}
+
+fn mistral_decode_attention_with_norm(
+    input: &ForwardState,
+    config: &ModelConfig,
+    layer_idx: usize,
+    weights: &crate::model_weights::LayerWeights,
+    kv_caches: &mut [KVCache],
+) -> Result<Vec<f32>, EngineError> {
+    let hidden_dim = input.hidden_dim();
+
+    let attn_norm_weights = weights.attn_norm.as_f32_slice()?;
+    if attn_norm_weights.len() != hidden_dim {
+        return Err(EngineError::Model(format!(
+            "attn_norm weights len {} != hidden_dim {}",
+            attn_norm_weights.len(),
+            hidden_dim
+        )));
+    }
+
+    let mut normed = vec![0.0f32; hidden_dim];
+    rmsnorm(
+        input.hidden(),
+        attn_norm_weights,
+        config.rms_norm_eps,
+        &mut normed,
+    )?;
+
+    let normed_state = ForwardState::from_flat(normed, 1, hidden_dim)?;
+    let layer_attn = config.layer_attention_for(layer_idx)?;
+    let layer_dims = config.layer_dims_for(layer_idx)?;
+    let attn_out = decode_attention_layer(
+        &normed_state,
+        config,
+        layer_dims,
+        layer_attn,
+        weights,
+        kv_caches,
+        layer_idx,
+    )?;
+
+    let mut residual_out = vec![0.0f32; hidden_dim];
+    residual_add(input.hidden(), &attn_out, &mut residual_out)?;
+    Ok(residual_out)
+}
+
+fn gemma4_decode_attention_with_norm(
+    input: &ForwardState,
+    config: &ModelConfig,
+    layer_idx: usize,
+    weights: &crate::model_weights::LayerWeights,
+    kv_caches: &mut [KVCache],
+) -> Result<Vec<f32>, EngineError> {
+    let hidden_dim = input.hidden_dim();
+
+    let attn_norm_weights = weights.attn_norm.as_f32_slice()?;
+    let post_attn_w = weights
+        .attn_post_norm
+        .ok_or_else(|| EngineError::Model("Gemma 4: missing post_attention_norm".into()))?
+        .as_f32_slice()?;
+    if attn_norm_weights.len() != hidden_dim || post_attn_w.len() != hidden_dim {
+        return Err(EngineError::Model(
+            "Gemma 4: attn norm weight length mismatch".into(),
+        ));
+    }
+
+    let mut normed = vec![0.0f32; hidden_dim];
+    rmsnorm(
+        input.hidden(),
+        attn_norm_weights,
+        config.rms_norm_eps,
+        &mut normed,
+    )?;
+
+    let normed_state = ForwardState::from_flat(normed, 1, hidden_dim)?;
+    let layer_attn = config.layer_attention_for(layer_idx)?;
+    let layer_dims = config.layer_dims_for(layer_idx)?;
+    let mut attn_out = decode_attention_layer(
+        &normed_state,
+        config,
+        layer_dims,
+        layer_attn,
+        weights,
+        kv_caches,
+        layer_idx,
+    )?;
+
+    let mut tmp = vec![0.0f32; hidden_dim];
+    rmsnorm(&attn_out, post_attn_w, config.rms_norm_eps, &mut tmp)?;
+    attn_out.copy_from_slice(&tmp);
+
+    let mut residual_out = vec![0.0f32; hidden_dim];
+    residual_add(input.hidden(), &attn_out, &mut residual_out)?;
+    Ok(residual_out)
 }

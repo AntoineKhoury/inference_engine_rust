@@ -1,160 +1,36 @@
 use std::collections::HashSet;
 
 use crate::EngineError;
-use crate::core::tensor::Tensor;
 use crate::model_config::{ModelConfig, ModelFamily};
 use crate::model_loader::gguf_types::GGUFData;
 
-#[derive(Debug, Clone, Copy)]
-pub struct Gemma4PleTensors<'a> {
-    pub per_layer_token_embd: &'a Tensor,
-    pub per_layer_model_proj: &'a Tensor,
-    pub per_layer_proj_norm: &'a Tensor,
-}
-
-#[derive(Debug)]
-pub struct LayerWeights<'a> {
-    pub attn_norm: &'a Tensor,
-    pub ffn_norm: &'a Tensor,
-    /// Gemma 4: RMSNorm on attention output before residual (`post_attention_norm`).
-    pub attn_post_norm: Option<&'a Tensor>,
-    /// Gemma 4: RMSNorm on FFN output before residual (`post_ffw_norm`).
-    pub ffn_post_norm: Option<&'a Tensor>,
-    /// Per-head RMSNorm on Q before RoPE (Gemma 4); `None` for Llama/Mistral-style blocks.
-    pub attn_q_norm: Option<&'a Tensor>,
-    pub attn_k_norm: Option<&'a Tensor>,
-    pub wq: &'a Tensor,
-    pub wk: &'a Tensor,
-    pub wv: &'a Tensor,
-    pub wo: &'a Tensor,
-    pub w_gate: &'a Tensor,
-    pub w_up: &'a Tensor,
-    pub w_down: &'a Tensor,
-    /// PLE: `hidden -> ple_dim` (`blk.*.inp_gate`).
-    pub ple_inp_gate: Option<&'a Tensor>,
-    /// PLE: `ple_dim -> hidden` (`blk.*.proj`).
-    pub ple_proj: Option<&'a Tensor>,
-    /// PLE: RMSNorm on projected vector before residual (`blk.*.post_norm`).
-    pub ple_post_norm: Option<&'a Tensor>,
-    /// Gemma 4 full-attention: `blk.*.rope_freqs.weight` for proportional RoPE (optional; sliding layers omit).
-    pub rope_freqs: Option<&'a Tensor>,
-    /// Gemma 4: HF `layer_scalar` / GGUF `blk.*.layer_output_scale.weight` (length1); applied after PLE.
-    pub layer_output_scale: Option<&'a Tensor>,
-}
-
-#[derive(Debug)]
-pub struct ModelWeights<'a> {
-    pub token_embeddings: &'a Tensor,
-    pub output_norm: &'a Tensor,
-    pub lm_head: &'a Tensor,
-    pub layers: Vec<LayerWeights<'a>>,
-    pub gemma4_ple: Option<Gemma4PleTensors<'a>>,
-}
-
-impl<'a> ModelWeights<'a> {
-    pub fn from_loaded(gguf: &'a GGUFData, names: &ModelWeightNames) -> Result<Self, EngineError> {
-        let mut layers = Vec::with_capacity(names.layers.len());
-        for layer in &names.layers {
-            layers.push(LayerWeights {
-                attn_norm: get_loaded(gguf, &layer.attn_norm)?,
-                ffn_norm: get_loaded(gguf, &layer.ffn_norm)?,
-                attn_post_norm: layer
-                    .attn_post_norm
-                    .as_ref()
-                    .map(|n| get_loaded(gguf, n))
-                    .transpose()?,
-                ffn_post_norm: layer
-                    .ffn_post_norm
-                    .as_ref()
-                    .map(|n| get_loaded(gguf, n))
-                    .transpose()?,
-                attn_q_norm: layer
-                    .attn_q_norm
-                    .as_ref()
-                    .map(|n| get_loaded(gguf, n))
-                    .transpose()?,
-                attn_k_norm: layer
-                    .attn_k_norm
-                    .as_ref()
-                    .map(|n| get_loaded(gguf, n))
-                    .transpose()?,
-                wq: get_loaded(gguf, &layer.wq)?,
-                wk: get_loaded(gguf, &layer.wk)?,
-                wv: get_loaded(gguf, &layer.wv)?,
-                wo: get_loaded(gguf, &layer.wo)?,
-                w_gate: get_loaded(gguf, &layer.w_gate)?,
-                w_up: get_loaded(gguf, &layer.w_up)?,
-                w_down: get_loaded(gguf, &layer.w_down)?,
-                ple_inp_gate: layer
-                    .ple_inp_gate
-                    .as_ref()
-                    .map(|n| get_loaded(gguf, n))
-                    .transpose()?,
-                ple_proj: layer
-                    .ple_proj
-                    .as_ref()
-                    .map(|n| get_loaded(gguf, n))
-                    .transpose()?,
-                ple_post_norm: layer
-                    .ple_post_norm
-                    .as_ref()
-                    .map(|n| get_loaded(gguf, n))
-                    .transpose()?,
-                rope_freqs: layer
-                    .rope_freqs
-                    .as_ref()
-                    .map(|n| get_loaded(gguf, n))
-                    .transpose()?,
-                layer_output_scale: layer
-                    .layer_output_scale
-                    .as_ref()
-                    .map(|n| get_loaded(gguf, n))
-                    .transpose()?,
-            });
-        }
-
-        let gemma4_ple = if let Some(ref g) = names.gemma4_ple {
-            Some(Gemma4PleTensors {
-                per_layer_token_embd: get_loaded(gguf, &g.per_layer_token_embd)?,
-                per_layer_model_proj: get_loaded(gguf, &g.per_layer_model_proj)?,
-                per_layer_proj_norm: get_loaded(gguf, &g.per_layer_proj_norm)?,
-            })
-        } else {
-            None
-        };
-
-        Ok(Self {
-            token_embeddings: get_loaded(gguf, &names.token_embeddings)?,
-            output_norm: get_loaded(gguf, &names.output_norm)?,
-            lm_head: get_loaded(gguf, &names.lm_head)?,
-            layers,
-            gemma4_ple,
-        })
-    }
-}
-
+/// Resolved GGUF tensor names for a single transformer block.
+///
+/// Fields are `pub(crate)` so [`super::view`] can build borrowed [`super::view::LayerWeights`]
+/// from the same names without exposing the raw strings publicly.
 #[derive(Debug)]
 pub struct LayerNames {
-    attn_norm: String,
-    ffn_norm: String,
-    attn_post_norm: Option<String>,
-    ffn_post_norm: Option<String>,
-    attn_q_norm: Option<String>,
-    attn_k_norm: Option<String>,
-    wq: String,
-    wk: String,
-    wv: String,
-    wo: String,
-    w_gate: String,
-    w_up: String,
-    w_down: String,
-    ple_inp_gate: Option<String>,
-    ple_proj: Option<String>,
-    ple_post_norm: Option<String>,
-    rope_freqs: Option<String>,
-    layer_output_scale: Option<String>,
+    pub(crate) attn_norm: String,
+    pub(crate) ffn_norm: String,
+    pub(crate) attn_post_norm: Option<String>,
+    pub(crate) ffn_post_norm: Option<String>,
+    pub(crate) attn_q_norm: Option<String>,
+    pub(crate) attn_k_norm: Option<String>,
+    pub(crate) wq: String,
+    pub(crate) wk: String,
+    pub(crate) wv: String,
+    pub(crate) wo: String,
+    pub(crate) w_gate: String,
+    pub(crate) w_up: String,
+    pub(crate) w_down: String,
+    pub(crate) ple_inp_gate: Option<String>,
+    pub(crate) ple_proj: Option<String>,
+    pub(crate) ple_post_norm: Option<String>,
+    pub(crate) rope_freqs: Option<String>,
+    pub(crate) layer_output_scale: Option<String>,
 }
 
+/// Resolved names for Gemma 4 global PLE tensors (not per-layer).
 #[derive(Debug)]
 pub struct Gemma4PleNames {
     pub per_layer_token_embd: String,
@@ -162,13 +38,14 @@ pub struct Gemma4PleNames {
     pub per_layer_proj_norm: String,
 }
 
+/// Resolved GGUF tensor names for the entire model, ready to be loaded.
 #[derive(Debug)]
 pub struct ModelWeightNames {
-    token_embeddings: String,
-    output_norm: String,
-    lm_head: String,
-    layers: Vec<LayerNames>,
-    gemma4_ple: Option<Gemma4PleNames>,
+    pub(crate) token_embeddings: String,
+    pub(crate) output_norm: String,
+    pub(crate) lm_head: String,
+    pub(crate) layers: Vec<LayerNames>,
+    pub(crate) gemma4_ple: Option<Gemma4PleNames>,
 }
 
 impl ModelWeightNames {
@@ -456,9 +333,4 @@ fn resolve_name_from_strings(
     Err(EngineError::Model(format!(
         "none of the candidate tensor names were found: {candidates:?}"
     )))
-}
-
-fn get_loaded<'a>(gguf: &'a GGUFData, name: &str) -> Result<&'a Tensor, EngineError> {
-    gguf.get_tensor(name)
-        .ok_or_else(|| EngineError::Model(format!("tensor '{name}' not found after loading")))
 }

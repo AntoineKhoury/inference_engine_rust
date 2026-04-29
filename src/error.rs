@@ -30,7 +30,7 @@ pub enum EngineError {
     KvCache(#[from] crate::layers::attention::KVCacheError),
 
     #[error(transparent)]
-    Sampling(#[from] crate::sampling::SamplingError),
+    Sampling(#[from] crate::engine::sampling::SamplingError),
 
     /// Invalid arguments to a low-level op (e.g. RoPE dimensions).
     #[error("invalid op: {0}")]

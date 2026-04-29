@@ -15,9 +15,9 @@ use inference_engine_rust::EngineError;
 use inference_engine_rust::chat_prompt::{
     ChatPromptStyle, gemma4_e2b_assistant_visible, gemma4_e2b_decode_has_structure_marker,
 };
-use inference_engine_rust::generation::greedy_next_token;
+use inference_engine_rust::engine::generation::greedy_next_token;
 use inference_engine_rust::loaded_model::LoadedModel;
-use inference_engine_rust::session::InferenceSession;
+use inference_engine_rust::engine::session::InferenceSession;
 use inference_engine_rust::tokenizer::Tokenizer;
 
 #[derive(Parser, Debug)]

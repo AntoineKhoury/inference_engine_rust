@@ -1,11 +1,10 @@
 use crate::EngineError;
+use crate::engine::embed::{prefill_from_tokens_loaded, prefill_state_for_single_token_loaded};
+use crate::engine::runtime::{decode_forward, final_logits_last_token, prefill_forward};
+use crate::engine::state::ForwardState;
 use crate::layers::attention::{KVCache, kv_caches_for_config};
 use crate::loaded_model::LoadedModel;
 use crate::model_weights::ModelWeights;
-use crate::prefill::{
-    PrefillState, prefill_from_tokens_loaded, prefill_state_for_single_token_loaded,
-};
-use crate::runtime::{decode_forward, final_logits_last_token, prefill_forward};
 
 /// Mutable inference state for one generation run.
 ///
@@ -42,12 +41,12 @@ impl<'a> InferenceSession<'a> {
         self.kv_caches = kv_caches_for_config(self.model.config());
     }
 
-    pub fn prefill(&mut self, token_ids: &[u32]) -> Result<PrefillState, EngineError> {
+    pub fn prefill(&mut self, token_ids: &[u32]) -> Result<ForwardState, EngineError> {
         let input = prefill_from_tokens_loaded(self.model.gguf(), self.model.config(), token_ids)?;
         self.prefill_prepared(&input)
     }
 
-    pub fn prefill_prepared(&mut self, input: &PrefillState) -> Result<PrefillState, EngineError> {
+    pub fn prefill_prepared(&mut self, input: &ForwardState) -> Result<ForwardState, EngineError> {
         prefill_forward(
             input,
             self.model.config(),
@@ -56,7 +55,7 @@ impl<'a> InferenceSession<'a> {
         )
     }
 
-    pub fn decode_token(&mut self, token_id: u32) -> Result<PrefillState, EngineError> {
+    pub fn decode_token(&mut self, token_id: u32) -> Result<ForwardState, EngineError> {
         let input = prefill_state_for_single_token_loaded(
             self.model.gguf(),
             self.model.config(),
@@ -70,7 +69,7 @@ impl<'a> InferenceSession<'a> {
         )
     }
 
-    pub fn logits_last_token(&self, state: &PrefillState) -> Result<Vec<f32>, EngineError> {
+    pub fn logits_last_token(&self, state: &ForwardState) -> Result<Vec<f32>, EngineError> {
         final_logits_last_token(state, self.model.config(), &self.weights)
     }
 }
