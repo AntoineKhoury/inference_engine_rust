@@ -63,11 +63,14 @@ Shared flags: **`-m`** / **`--model`**, **`-t`** / **`--tokenizer`**, **`--promp
 | **ratio_ttft** | `rust_ttft_infer_ms / llama_ttft_infer_ms` (higher = slower Rust vs llama on that run). |
 | **speed_target** | What you were trying to hit on that iteration. |
 
+**llama.cpp reference flags** (used by `--compare-llama`): `-t 1 -ngl 0 --device none --no-op-offload --no-warmup --perf -n 1`. This means: single thread, no GPU layer offload, no device offload, no op-offload, no warmup pass, perf output, generate 1 token only. Ensures a CPU-only apples-to-apples comparison with Rust (which is also single-threaded, CPU-only).
+
 *Prepend new data rows after the `|------|` separator line; do not delete older rows (append-only).*
 
 | date | exp | machine_id | commit | delta_vs_previous | bench_command | prompt_toks | rust_ttft_infer_ms | llama_ttft_infer_ms | ratio_ttft | rust_decode_tps | llama_decode_tps | llama_t | llama_ngl | speed_target | notes |
 |------|-----|------------|--------|-------------------|---------------|-------------|--------------------|--------------------|------------|-----------------|------------------|---------|-----------|--------------|-------|
-| 2026-04-14 | exp-001 | ak-mbp-m1 | ab060e0 | baseline | `bench_compare interactive-ttft --compare-llama` (crate defaults: llama `--no-warmup`, `-t 1`, `-ngl 0`) | 6 | 64411.6 | 1592.8 | 40.4 | — | — | 1 | 0 | establish TTFT infer baseline vs Homebrew llama | Rust: ~64.2 s `prompt_eval_ms`, ~202 ms `lm_head_sample_ms`; llama load ~1.59 s excluded from ttft infer. Default prompt `Rust will rule the`, Mistral 7B Q4_K_M. |
+| 2026-04-29 | exp-003 | ak-mbp-m1 | ec077b7 | new model baseline (Gemma 4 E2B Q8) | `bench_compare --json -m gemma-4-e2b-it/gemma-4-E2B-it-Q8_0.gguf -t gemma-4-e2b-it/tokenizer.json interactive-ttft` + `decode-throughput --decode-tokens 5` | 5 | 16882.4 | — | — | 0.322 | — | — | — | establish Gemma decode+TTFT baseline | Gemma 4 E2B IT Q8_0 (2.6B). prompt_eval 15554 ms, lm_head_sample 1087 ms, warm_prefill 14917 ms. Default prompt `Rust will rule the`. |
+| 2026-04-29 | exp-002 | ak-mbp-m1 | ec077b7 | baseline re-measure | `bench_compare --json --compare-llama interactive-ttft` + `decode-throughput --decode-tokens 5` | 6 | 74533.9 | 2833.4 | 26.3 | 0.083 | — | 1 | 0 | re-establish Mistral TTFT+decode baseline | Mistral 7B Q4_K_M. llama flags: `-t 1 -ngl 0 --device none --no-op-offload --no-warmup --perf -n 1` (CPU-only, single-thread, no GPU). prompt_eval 74288 ms, lm_head_sample 246 ms. llama load 2840 ms excluded. Decode: 5 toks in 60188 ms. Default prompt `Rust will rule the`. |
 
 ### System profile (same machine → same `machine_id`)
 
@@ -75,7 +78,7 @@ Update when hardware or llama install changes.
 
 | machine_id | machine label | CPU / SoC | RAM | OS | llama.cpp install | notes |
 |------------|---------------|-----------|-----|----|-------------------|-------|
-| ak-mbp-m1 | MacBook Pro (M1) | Apple M1 | *(fill)* | macOS | Homebrew `llama.cpp` | Matches **exp-001**; adjust RAM/OS as needed. |
+| ak-mbp-m1 | MacBook Pro (M1) | Apple M1 | *(fill)* | macOS | Homebrew `llama.cpp` | Matches **exp-002/003**; llama called with CPU-fair flags (see above). |
 
 ## Greedy CLI (generation)
 

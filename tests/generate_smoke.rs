@@ -14,9 +14,9 @@ use inference_engine_rust::layers::attention::kv_caches_for_config;
 use inference_engine_rust::model_config::{ModelConfig, TokenizerPromptConfig};
 use inference_engine_rust::model_loader::file_loader::read_file;
 use inference_engine_rust::model_weights::{ModelWeightNames, ModelWeights};
-use inference_engine_rust::prefill::{prefill_from_tokens, prefill_state_for_single_token_loaded};
-use inference_engine_rust::runtime::{decode_forward, final_logits_last_token, prefill_forward};
-use inference_engine_rust::sampling::sample_greedy;
+use inference_engine_rust::engine::embed::{prefill_from_tokens, prefill_state_for_single_token_loaded};
+use inference_engine_rust::engine::runtime::{decode_forward, final_logits_last_token, prefill_forward};
+use inference_engine_rust::engine::sampling::sample_greedy;
 use inference_engine_rust::tokenizer::Tokenizer;
 
 use common::{REFERENCE_MODEL_REL_PATH, reference_model_path, tokenizer_model_path};
