@@ -14,4 +14,5 @@ pub mod ops;
 pub mod prefill;
 pub mod runtime;
 pub mod sampling;
+pub mod session;
 pub mod tokenizer;

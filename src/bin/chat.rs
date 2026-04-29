@@ -23,13 +23,9 @@ use inference_engine_rust::chat_prompt::{
     ChatMessage, ChatPromptStyle, gemma4_e2b_assistant_visible,
     gemma4_e2b_decode_has_structure_marker,
 };
-use inference_engine_rust::layers::attention::kv_caches_for_config;
 use inference_engine_rust::loaded_model::LoadedModel;
-use inference_engine_rust::prefill::{
-    prefill_from_tokens_loaded, prefill_state_for_single_token_loaded,
-};
-use inference_engine_rust::runtime::{decode_forward, final_logits_last_token, prefill_forward};
 use inference_engine_rust::sampling::sample_greedy;
+use inference_engine_rust::session::InferenceSession;
 use inference_engine_rust::tokenizer::Tokenizer;
 
 #[derive(Parser, Debug)]
@@ -85,8 +81,6 @@ fn main() -> Result<(), EngineError> {
     let model = LoadedModel::load(&args.model)?;
     let mut tokenizer = Tokenizer::load_from_file(&args.tokenizer)?;
     let tok_prompt = model.tokenizer_prompt();
-    let config = model.config();
-    let weights = model.weights()?;
 
     let stop_id = args.stop_token.unwrap_or(tok_prompt.eos_token_id);
 
@@ -133,9 +127,8 @@ fn main() -> Result<(), EngineError> {
         );
         std::io::stderr().flush().ok();
 
-        let mut kv_caches = kv_caches_for_config(config);
-        let prefill_in = prefill_from_tokens_loaded(model.gguf(), config, &prompt_ids)?;
-        let mut state = prefill_forward(&prefill_in, config, &weights, &mut kv_caches)?;
+        let mut session = InferenceSession::new(&model);
+        let mut state = session.prefill(&prompt_ids)?;
 
         let stream = !args.no_stream;
         let mut generated: Vec<u32> = Vec::new();
@@ -147,7 +140,7 @@ fn main() -> Result<(), EngineError> {
         }
 
         for _ in 0..args.max_reply_tokens {
-            let logits = final_logits_last_token(&state, config, &weights)?;
+            let logits = session.logits_last_token(&state)?;
             let next_id = sample_greedy(&logits)?;
             if next_id == stop_id {
                 break;
@@ -187,8 +180,7 @@ fn main() -> Result<(), EngineError> {
                 break;
             }
 
-            let step_in = prefill_state_for_single_token_loaded(model.gguf(), config, next_id)?;
-            state = decode_forward(&step_in, config, &weights, &mut kv_caches)?;
+            state = session.decode_token(next_id)?;
         }
 
         let raw = tokenizer.decode_piece_ids(&generated)?;
