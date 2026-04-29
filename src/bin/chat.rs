@@ -24,9 +24,7 @@ use inference_engine_rust::chat_prompt::{
     gemma4_e2b_decode_has_structure_marker,
 };
 use inference_engine_rust::layers::attention::kv_caches_for_config;
-use inference_engine_rust::model_config::{ModelConfig, TokenizerPromptConfig};
-use inference_engine_rust::model_loader::file_loader::read_file;
-use inference_engine_rust::model_weights::{ModelWeightNames, ModelWeights};
+use inference_engine_rust::loaded_model::LoadedModel;
 use inference_engine_rust::prefill::{
     prefill_from_tokens_loaded, prefill_state_for_single_token_loaded,
 };
@@ -77,12 +75,6 @@ fn main() -> Result<(), EngineError> {
         ));
     }
 
-    if !args.model.is_file() {
-        return Err(EngineError::Model(format!(
-            "model file not found: {}",
-            args.model.display()
-        )));
-    }
     if !args.tokenizer.is_file() {
         return Err(EngineError::Model(format!(
             "tokenizer file not found: {}",
@@ -90,19 +82,11 @@ fn main() -> Result<(), EngineError> {
         )));
     }
 
-    let model_path = args
-        .model
-        .to_str()
-        .ok_or_else(|| EngineError::Model("model path is not valid UTF-8".into()))?;
-
-    let mut gguf = read_file(model_path)?;
+    let model = LoadedModel::load(&args.model)?;
     let mut tokenizer = Tokenizer::load_from_file(&args.tokenizer)?;
-    let tok_prompt = TokenizerPromptConfig::from_gguf(&gguf)?;
-
-    let config = ModelConfig::from_gguf(&gguf)?;
-    let names = ModelWeightNames::resolve(&gguf, &config)?;
-    names.load_all(&mut gguf, model_path)?;
-    let weights = ModelWeights::from_loaded(&gguf, &names)?;
+    let tok_prompt = model.tokenizer_prompt();
+    let config = model.config();
+    let weights = model.weights()?;
 
     let stop_id = args.stop_token.unwrap_or(tok_prompt.eos_token_id);
 
@@ -149,9 +133,9 @@ fn main() -> Result<(), EngineError> {
         );
         std::io::stderr().flush().ok();
 
-        let mut kv_caches = kv_caches_for_config(&config);
-        let prefill_in = prefill_from_tokens_loaded(&gguf, &config, &prompt_ids)?;
-        let mut state = prefill_forward(&prefill_in, &config, &weights, &mut kv_caches)?;
+        let mut kv_caches = kv_caches_for_config(config);
+        let prefill_in = prefill_from_tokens_loaded(model.gguf(), config, &prompt_ids)?;
+        let mut state = prefill_forward(&prefill_in, config, &weights, &mut kv_caches)?;
 
         let stream = !args.no_stream;
         let mut generated: Vec<u32> = Vec::new();
@@ -163,7 +147,7 @@ fn main() -> Result<(), EngineError> {
         }
 
         for _ in 0..args.max_reply_tokens {
-            let logits = final_logits_last_token(&state, &config, &weights)?;
+            let logits = final_logits_last_token(&state, config, &weights)?;
             let next_id = sample_greedy(&logits)?;
             if next_id == stop_id {
                 break;
@@ -203,8 +187,8 @@ fn main() -> Result<(), EngineError> {
                 break;
             }
 
-            let step_in = prefill_state_for_single_token_loaded(&gguf, &config, next_id)?;
-            state = decode_forward(&step_in, &config, &weights, &mut kv_caches)?;
+            let step_in = prefill_state_for_single_token_loaded(model.gguf(), config, next_id)?;
+            state = decode_forward(&step_in, config, &weights, &mut kv_caches)?;
         }
 
         let raw = tokenizer.decode_piece_ids(&generated)?;

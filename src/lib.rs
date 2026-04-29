@@ -6,6 +6,7 @@ pub mod bench_metrics;
 pub mod chat_prompt;
 pub mod core;
 pub mod layers;
+pub mod loaded_model;
 pub mod model_config;
 pub mod model_loader;
 pub mod model_weights;
