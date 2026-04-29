@@ -1,5 +1,5 @@
-use crate::ops::quant::utils::{f16_to_f32, f32_to_f16};
 use crate::EngineError;
+use crate::ops::quant::utils::f16_to_f32;
 
 /// `scale * q` with the convention that `0 * ∞` is `0` (IEEE would yield NaN).
 #[inline]
@@ -9,56 +9,6 @@ fn scale_times_quant_f64(scale: f64, q: f64) -> f64 {
     } else {
         scale * q
     }
-}
-
-/// Quantize a row of F32 values into Q8_0 blocks (matches ggml `quantize_row_q8_0`).
-/// `out` must have capacity for `(row.len() + Q8_0_BLOCK_ELEMENTS - 1) / Q8_0_BLOCK_ELEMENTS`
-/// blocks, each `Q8_0_BLOCK_SIZE` bytes.
-pub fn quantize_row_q8_0(row: &[f32], out: &mut Vec<u8>) {
-    let n = row.len();
-    let n_blocks = (n + Q8_0_BLOCK_ELEMENTS - 1) / Q8_0_BLOCK_ELEMENTS;
-    out.clear();
-    out.reserve(n_blocks * Q8_0_BLOCK_SIZE);
-    for b in 0..n_blocks {
-        let start = b * Q8_0_BLOCK_ELEMENTS;
-        let end = (start + Q8_0_BLOCK_ELEMENTS).min(n);
-        let mut amax = 0.0f32;
-        for i in start..end {
-            let a = row[i].abs();
-            if a > amax {
-                amax = a;
-            }
-        }
-        let d = amax / 127.0;
-        let d_f16 = f32_to_f16(d);
-        let id = if d != 0.0 { 1.0 / d } else { 0.0 };
-        out.push(d_f16 as u8);
-        out.push((d_f16 >> 8) as u8);
-        for i in start..end {
-            let q = (row[i] * id).round().max(-127.0).min(127.0) as i8;
-            out.push(q as u8);
-        }
-        for _ in end..start + Q8_0_BLOCK_ELEMENTS {
-            out.push(0);
-        }
-    }
-}
-
-/// Dot product of two Q8_0 rows (matches ggml `ggml_vec_dot_q8_0_q8_0`).
-/// Both `a_q8` and `b_q8` are byte buffers with `n_blocks` Q8_0 blocks each.
-pub fn vec_dot_q8_0(a_q8: &[u8], b_q8: &[u8], n_blocks: usize) -> f32 {
-    let mut sum = 0.0f32;
-    for b in 0..n_blocks {
-        let off = b * Q8_0_BLOCK_SIZE;
-        let d_a = f16_to_f32(u16::from_le_bytes([a_q8[off], a_q8[off + 1]]));
-        let d_b = f16_to_f32(u16::from_le_bytes([b_q8[off], b_q8[off + 1]]));
-        let mut isum: i32 = 0;
-        for i in 0..Q8_0_BLOCK_ELEMENTS {
-            isum += (a_q8[off + 2 + i] as i8 as i32) * (b_q8[off + 2 + i] as i8 as i32);
-        }
-        sum += (isum as f32) * (d_a * d_b);
-    }
-    sum
 }
 
 /// `block_q4_K` in ggml: d[2] + dmin[2] + scales[12] + qs[128] — 144 bytes.
@@ -89,7 +39,10 @@ pub fn dequantize_q8_0_block(block: &[u8], out: &mut [f32]) -> Result<(), Engine
 }
 
 /// One Q4_K superblock (256 weights). Port of ggml `dequantize_row_q4_K` for a single `block_q4_K`.
-pub fn dequantize_q4k_block(block: &[u8], out: &mut [f32]) -> Result<(), EngineError> {
+pub fn dequantize_q4k_block(
+    block: &[u8],
+    out: &mut [f32],
+) -> Result<(), EngineError> {
     if out.len() < BLOCK_ELEMENTS {
         return Err(EngineError::Tensor(
             "Q4K block output buffer too small".into(),
@@ -136,7 +89,10 @@ pub fn dequantize_q4k_block(block: &[u8], out: &mut [f32]) -> Result<(), EngineE
 }
 
 /// Dequantize one Q6_K superblock (256 weights). Layout matches ggml `block_q6_K` / `dequantize_row_q6_K`.
-pub fn dequantize_q6k_block(block: &[u8], out: &mut [f32]) -> Result<(), EngineError> {
+pub fn dequantize_q6k_block(
+    block: &[u8],
+    out: &mut [f32],
+) -> Result<(), EngineError> {
     if block.len() < Q6K_BLOCK_SIZE {
         return Err(EngineError::Tensor("Q6K block buffer too small".into()));
     }
@@ -162,12 +118,15 @@ pub fn dequantize_q6k_block(block: &[u8], out: &mut [f32]) -> Result<(), EngineE
 
         for l in 0..32 {
             let is = l / 16;
-            let q1 = ((ql[ql_off + l] & 0xF) as i32 | ((qh[qh_off + l] & 3) as i32) << 4) - 32;
+            let q1 = ((ql[ql_off + l] & 0xF) as i32
+                | ((qh[qh_off + l] & 3) as i32) << 4)
+                - 32;
             let q2 = ((ql[ql_off + l + 32] & 0xF) as i32
                 | (((qh[qh_off + l] >> 2) & 3) as i32) << 4)
                 - 32;
-            let q3 =
-                ((ql[ql_off + l] >> 4) as i32 | (((qh[qh_off + l] >> 4) & 3) as i32) << 4) - 32;
+            let q3 = ((ql[ql_off + l] >> 4) as i32
+                | (((qh[qh_off + l] >> 4) & 3) as i32) << 4)
+                - 32;
             let q4 = ((ql[ql_off + l + 32] >> 4) as i32
                 | (((qh[qh_off + l] >> 6) & 3) as i32) << 4)
                 - 32;

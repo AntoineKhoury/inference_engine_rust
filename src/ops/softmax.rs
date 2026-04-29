@@ -18,15 +18,13 @@ pub fn softmax(
             max = x;
         }
     }
-    // Match ggml: exp in f32, accumulate sum in f64
-    let mut sum_exp = 0.0f64;
+    let mut sum_exp = 0.0f32;
     for &x in input.iter() {
-        sum_exp += (x - max).exp() as f64;
+        sum_exp += (x - max).exp();
     }
 
-    let inv_sum = (1.0f64 / sum_exp) as f32;
     for (out_slot, &x) in output.iter_mut().zip(input.iter()) {
-        *out_slot = (x - max).exp() * inv_sum;
+        *out_slot = (x - max).exp() / sum_exp;
     }
 
     Ok(())

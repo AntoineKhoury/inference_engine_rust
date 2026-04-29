@@ -11,9 +11,8 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use inference_engine_rust::EngineError;
 use inference_engine_rust::chat_prompt::{
-    ChatPromptStyle, gemma4_e2b_assistant_visible, gemma4_e2b_decode_has_structure_marker,
+    gemma4_e2b_assistant_visible, gemma4_e2b_decode_has_structure_marker, ChatPromptStyle,
 };
 use inference_engine_rust::layers::attention::kv_caches_for_config;
 use inference_engine_rust::model_config::{ModelConfig, TokenizerPromptConfig};
@@ -25,6 +24,7 @@ use inference_engine_rust::prefill::{
 };
 use inference_engine_rust::sampling::sample_greedy;
 use inference_engine_rust::tokenizer::Tokenizer;
+use inference_engine_rust::EngineError;
 
 #[derive(Parser, Debug)]
 #[command(name = "inference_engine_rust")]

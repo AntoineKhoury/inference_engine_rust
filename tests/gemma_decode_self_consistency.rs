@@ -51,8 +51,14 @@ fn argmax_f32(v: &[f32]) -> Option<usize> {
         .map(|(i, _)| i)
 }
 
-fn tokens_from_env_or_prompt(tok_path: &std::path::Path, tok_prompt: &TokenizerPromptConfig) -> Vec<u32> {
-    if let Some(s) = std::env::var("GEMMA_LOGITS_TOKEN_IDS").ok().filter(|s| !s.is_empty()) {
+fn tokens_from_env_or_prompt(
+    tok_path: &std::path::Path,
+    tok_prompt: &TokenizerPromptConfig,
+) -> Vec<u32> {
+    if let Some(s) = std::env::var("GEMMA_LOGITS_TOKEN_IDS")
+        .ok()
+        .filter(|s| !s.is_empty())
+    {
         let mut out = Vec::new();
         for part in s.split([',', ' ']).filter(|p| !p.is_empty()) {
             out.push(part.parse::<u32>().expect("GEMMA_LOGITS_TOKEN_IDS parse"));
@@ -78,19 +84,29 @@ fn gemma4_decode_logits_match_fullseq_prefill() {
         model_path.display()
     );
     let tok_path = gemma4_e2b_tokenizer_path();
-    assert!(tok_path.is_file(), "missing tokenizer at {}", tok_path.display());
+    assert!(
+        tok_path.is_file(),
+        "missing tokenizer at {}",
+        tok_path.display()
+    );
 
     let path_str = GEMMA4_E2B_Q8_GGUF_REL_PATH;
     let mut gguf = read_file(path_str).expect("read gguf");
     let tok_prompt = TokenizerPromptConfig::from_gguf(&gguf).expect("tok config");
 
     // Build token list: last element is the "decode" token.
-    let all_ids: Vec<u32> = if let Some(s) = std::env::var("GEMMA_LOGITS_TOKEN_IDS").ok().filter(|s| !s.is_empty()) {
+    let all_ids: Vec<u32> = if let Some(s) = std::env::var("GEMMA_LOGITS_TOKEN_IDS")
+        .ok()
+        .filter(|s| !s.is_empty())
+    {
         let mut out = Vec::new();
         for part in s.split([',', ' ']).filter(|p| !p.is_empty()) {
             out.push(part.parse::<u32>().expect("GEMMA_LOGITS_TOKEN_IDS parse"));
         }
-        assert!(out.len() >= 2, "GEMMA_LOGITS_TOKEN_IDS needs at least 2 tokens (prompt + decode)");
+        assert!(
+            out.len() >= 2,
+            "GEMMA_LOGITS_TOKEN_IDS needs at least 2 tokens (prompt + decode)"
+        );
         out
     } else {
         let mut tokenizer = Tokenizer::load_from_file(&tok_path).expect("tokenizer");
@@ -107,7 +123,7 @@ fn gemma4_decode_logits_match_fullseq_prefill() {
 
     let n = all_ids.len();
     let prompt_ids = &all_ids[..n - 1]; // first N-1 tokens: the prefill context
-    let decode_token = all_ids[n - 1];   // last token: fed as decode input
+    let decode_token = all_ids[n - 1]; // last token: fed as decode input
 
     eprintln!("prompt_ids (N={}) : {:?}", prompt_ids.len(), prompt_ids);
     eprintln!("decode_token      : {decode_token}");
@@ -130,8 +146,8 @@ fn gemma4_decode_logits_match_fullseq_prefill() {
     let mut kv_a = kv_caches_for_config(&config);
     let state_a = prefill_forward(&prefill_full, &config, &weights, &mut kv_a)
         .expect("prefill_forward (full)");
-    let logits_a = final_logits_last_token(&state_a, &config, &weights)
-        .expect("final_logits (full prefill)");
+    let logits_a =
+        final_logits_last_token(&state_a, &config, &weights).expect("final_logits (full prefill)");
 
     // ── Path B: N-1 token prefill + 1 decode step ────────────────────────────
     let prefill_short = prefill_from_tokens_loaded(&gguf, &config, prompt_ids)
@@ -142,19 +158,29 @@ fn gemma4_decode_logits_match_fullseq_prefill() {
 
     let decode_in = prefill_state_for_single_token_loaded(&gguf, &config, decode_token)
         .expect("prefill_state_for_single_token_loaded");
-    let state_b_decode = decode_forward(&decode_in, &config, &weights, &mut kv_b)
-        .expect("decode_forward");
-    let logits_b = final_logits_last_token(&state_b_decode, &config, &weights)
-        .expect("final_logits (decode)");
+    let state_b_decode =
+        decode_forward(&decode_in, &config, &weights, &mut kv_b).expect("decode_forward");
+    let logits_b =
+        final_logits_last_token(&state_b_decode, &config, &weights).expect("final_logits (decode)");
 
-    assert_eq!(logits_a.len(), logits_b.len(), "vocab size mismatch between paths");
+    assert_eq!(
+        logits_a.len(),
+        logits_b.len(),
+        "vocab size mismatch between paths"
+    );
 
     let (max_abs, rmse) = diff_stats(&logits_a, &logits_b);
     let argmax_a = argmax_f32(&logits_a).unwrap();
     let argmax_b = argmax_f32(&logits_b).unwrap();
 
-    eprintln!("Path A (full prefill) argmax: {argmax_a}  logits[argmax_a]={:.4}", logits_a[argmax_a]);
-    eprintln!("Path B (decode step)  argmax: {argmax_b}  logits[argmax_b]={:.4}", logits_b[argmax_b]);
+    eprintln!(
+        "Path A (full prefill) argmax: {argmax_a}  logits[argmax_a]={:.4}",
+        logits_a[argmax_a]
+    );
+    eprintln!(
+        "Path B (decode step)  argmax: {argmax_b}  logits[argmax_b]={:.4}",
+        logits_b[argmax_b]
+    );
     eprintln!("Logit diff: max_abs={max_abs:.6}  RMSE={rmse:.6}");
 
     if argmax_a != argmax_b {
@@ -183,16 +209,26 @@ fn gemma4_decode_logits_match_fullseq_prefill() {
          decode path picks a different top token than prefill (RMSE={rmse:.6})"
     );
 
-    eprintln!("PASS: decode logits match full-prefill logits within RMSE={rmse:.6} (tol={tol_rmse})");
+    eprintln!(
+        "PASS: decode logits match full-prefill logits within RMSE={rmse:.6} (tol={tol_rmse})"
+    );
 }
 
 #[test]
 #[ignore = "requires model/gemma-4-e2b-it/gemma-4-E2B-it-Q8_0.gguf; slow (loads full model)"]
 fn gemma4_generation_decode_vs_teacher_forced_prefill() {
     let model_path = gemma4_e2b_q8_gguf_path();
-    assert!(model_path.is_file(), "missing Gemma GGUF at {}", model_path.display());
+    assert!(
+        model_path.is_file(),
+        "missing Gemma GGUF at {}",
+        model_path.display()
+    );
     let tok_path = gemma4_e2b_tokenizer_path();
-    assert!(tok_path.is_file(), "missing tokenizer at {}", tok_path.display());
+    assert!(
+        tok_path.is_file(),
+        "missing tokenizer at {}",
+        tok_path.display()
+    );
 
     let path_str = GEMMA4_E2B_Q8_GGUF_REL_PATH;
     let mut gguf = read_file(path_str).expect("read gguf");
@@ -217,7 +253,8 @@ fn gemma4_generation_decode_vs_teacher_forced_prefill() {
     // A) Normal prefill + decode loop
     let mut kv_a = kv_caches_for_config(&config);
     let prefill_a = prefill_from_tokens_loaded(&gguf, &config, &prompt_ids).expect("prefill A");
-    let mut state_a = prefill_forward(&prefill_a, &config, &weights, &mut kv_a).expect("prefill_forward A");
+    let mut state_a =
+        prefill_forward(&prefill_a, &config, &weights, &mut kv_a).expect("prefill_forward A");
     let mut gen_a: Vec<u32> = Vec::new();
     for _ in 0..max_new_tokens {
         let logits = final_logits_last_token(&state_a, &config, &weights).expect("logits A");
@@ -237,7 +274,8 @@ fn gemma4_generation_decode_vs_teacher_forced_prefill() {
     for _ in 0..max_new_tokens {
         let prefill_b = prefill_from_tokens_loaded(&gguf, &config, &full_ids).expect("prefill B");
         let mut kv_b = kv_caches_for_config(&config);
-        let state_b = prefill_forward(&prefill_b, &config, &weights, &mut kv_b).expect("prefill_forward B");
+        let state_b =
+            prefill_forward(&prefill_b, &config, &weights, &mut kv_b).expect("prefill_forward B");
         let logits = final_logits_last_token(&state_b, &config, &weights).expect("logits B");
         let next_id = argmax_f32(&logits).expect("argmax B") as u32;
         if next_id == stop_id {
@@ -247,9 +285,17 @@ fn gemma4_generation_decode_vs_teacher_forced_prefill() {
         full_ids.push(next_id);
     }
 
-    let shared_prefix = gen_a.iter().zip(gen_b.iter()).take_while(|(a, b)| a == b).count();
-    let a_text = tokenizer.decode_piece_ids(&gen_a).unwrap_or_else(|_| "<decode failed A>".to_string());
-    let b_text = tokenizer.decode_piece_ids(&gen_b).unwrap_or_else(|_| "<decode failed B>".to_string());
+    let shared_prefix = gen_a
+        .iter()
+        .zip(gen_b.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+    let a_text = tokenizer
+        .decode_piece_ids(&gen_a)
+        .unwrap_or_else(|_| "<decode failed A>".to_string());
+    let b_text = tokenizer
+        .decode_piece_ids(&gen_b)
+        .unwrap_or_else(|_| "<decode failed B>".to_string());
     eprintln!("prompt_ids: {:?}", prompt_ids);
     eprintln!("max_new_tokens={max_new_tokens} stop_id={stop_id}");
     eprintln!("A(normal decode) generated {} tokens", gen_a.len());
@@ -258,9 +304,7 @@ fn gemma4_generation_decode_vs_teacher_forced_prefill() {
     if shared_prefix < gen_a.len().min(gen_b.len()) {
         eprintln!(
             "first divergence at step {}: A={} B={}",
-            shared_prefix,
-            gen_a[shared_prefix],
-            gen_b[shared_prefix]
+            shared_prefix, gen_a[shared_prefix], gen_b[shared_prefix]
         );
     }
     eprintln!("A text: {:?}", a_text);

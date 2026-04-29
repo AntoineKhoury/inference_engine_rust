@@ -8,7 +8,7 @@
 /// tokens even when [`TokenizerPromptConfig::eos_token_id`] does not fire first—trim and stop.
 pub const GEMMA4_E2B_ASSISTANT_STOP_MARKERS: &[&str] = &[
     "<turn|>",
-    "<turn|", // incomplete closer before final `>`
+    "<turn|",  // incomplete closer before final `>`
     "<|turn>", // new role header (hallucinated continuation)
     "<|turn",
     "<|tool_call",
@@ -82,12 +82,7 @@ pub fn gemma4_e2b_strip_dangling_contraction_tail(s: &str) -> &str {
         .map(|(i, c)| i + c.len_utf8())
         .unwrap_or(0);
     let tail = &no_quote[tail_start..];
-    if tail.chars().count() == 1
-        && tail
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_alphabetic())
-    {
+    if tail.chars().count() == 1 && tail.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) {
         return no_quote[..tail_start].trim_end();
     }
     s
@@ -191,7 +186,9 @@ fn validate_chat_slice(messages: &[ChatMessage]) -> Result<(), &'static str> {
         return Err("conversation must start with a user message");
     }
     if messages.last().unwrap().role != ChatRole::User {
-        return Err("conversation must end with a user message (assistant reply not generated yet)");
+        return Err(
+            "conversation must end with a user message (assistant reply not generated yet)",
+        );
     }
     for w in messages.windows(2) {
         if w[0].role == w[1].role {
@@ -309,13 +306,19 @@ mod tests {
     #[test]
     fn gemma4_strip_dangling_contraction_after_turn_cut() {
         let s = "That's a very short message! I'";
-        assert_eq!(gemma4_e2b_strip_dangling_contraction_tail(s), "That's a very short message!");
+        assert_eq!(
+            gemma4_e2b_strip_dangling_contraction_tail(s),
+            "That's a very short message!"
+        );
     }
 
     #[test]
     fn gemma4_assistant_visible_truncates_then_strips() {
         let s = "That's a very short message! I'<|turn>user";
-        assert_eq!(gemma4_e2b_assistant_visible(s), "That's a very short message!");
+        assert_eq!(
+            gemma4_e2b_assistant_visible(s),
+            "That's a very short message!"
+        );
     }
 
     #[test]

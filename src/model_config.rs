@@ -265,15 +265,8 @@ impl ModelConfig {
 
         let gemma4_kv_borrow_from = match family {
             ModelFamily::Gemma4 => {
-                let mut n_shared =
+                let n_shared =
                     get_usize_opt(gguf, "gemma4.attention.shared_kv_layers").unwrap_or(0);
-                // Debug override for layer-bisection: force each layer to own K/V cache.
-                if std::env::var("INFERENCE_ENGINE_GEMMA4_DISABLE_SHARED_KV")
-                    .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                    .unwrap_or(false)
-                {
-                    n_shared = 0;
-                }
                 build_gemma4_kv_borrow_from(n_layers, n_shared, &layer_attention)?
             }
             ModelFamily::MistralLlama => vec![None; n_layers],
