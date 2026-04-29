@@ -11,7 +11,9 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use inference_engine_rust::EngineError;
+use inference_engine_rust::chat_prompt::{
+    gemma4_e2b_assistant_visible, gemma4_e2b_decode_has_structure_marker, ChatPromptStyle,
+};
 use inference_engine_rust::layers::attention::kv_caches_for_config;
 use inference_engine_rust::model_config::{ModelConfig, TokenizerPromptConfig};
 use inference_engine_rust::model_loader::file_loader::read_file;
@@ -21,8 +23,8 @@ use inference_engine_rust::prefill::{
     prefill_state_for_single_token_loaded,
 };
 use inference_engine_rust::sampling::sample_greedy;
-use inference_engine_rust::chat_prompt::ChatPromptStyle;
 use inference_engine_rust::tokenizer::Tokenizer;
+use inference_engine_rust::EngineError;
 
 #[derive(Parser, Debug)]
 #[command(name = "inference_engine_rust")]
@@ -120,17 +122,32 @@ fn main() -> Result<(), EngineError> {
 
     let mut state = prefill_forward(&prefill_in, &config, &weights, &mut kv_caches)?;
 
+    let stop_id = tok_prompt.eos_token_id;
     let mut generated = Vec::with_capacity(args.new_tokens);
     for _ in 0..args.new_tokens {
         let logits = final_logits_last_token(&state, &config, &weights)?;
         let next_id = sample_greedy(&logits)?;
+        if next_id == stop_id {
+            break;
+        }
         generated.push(next_id);
+        if matches!(chat_style, ChatPromptStyle::Gemma4E2b) {
+            let full = tokenizer.decode_piece_ids(&generated)?;
+            if gemma4_e2b_decode_has_structure_marker(&full) {
+                break;
+            }
+        }
 
         let step_in = prefill_state_for_single_token_loaded(&gguf, &config, next_id)?;
         state = decode_forward(&step_in, &config, &weights, &mut kv_caches)?;
     }
 
-    let continuation = tokenizer.decode_piece_ids(&generated)?;
+    let raw = tokenizer.decode_piece_ids(&generated)?;
+    let continuation = if matches!(chat_style, ChatPromptStyle::Gemma4E2b) {
+        gemma4_e2b_assistant_visible(&raw)
+    } else {
+        raw.trim_end().to_string()
+    };
 
     println!("{continuation}");
     Ok(())

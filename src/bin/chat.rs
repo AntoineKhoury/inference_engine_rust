@@ -18,11 +18,9 @@ use std::io::{BufRead, Write};
 use std::path::PathBuf;
 
 use clap::Parser;
-use inference_engine_rust::EngineError;
 use inference_engine_rust::chat_prompt::{
-    ChatMessage, ChatPromptStyle,
-    gemma4_e2b_assistant_visible, gemma4_e2b_decode_has_structure_marker,
-    gemma4_e2b_strip_dangling_contraction_tail, gemma4_e2b_truncate_assistant_at_structure,
+    gemma4_e2b_assistant_visible, gemma4_e2b_decode_has_structure_marker, ChatMessage,
+    ChatPromptStyle,
 };
 use inference_engine_rust::layers::attention::kv_caches_for_config;
 use inference_engine_rust::model_config::{ModelConfig, TokenizerPromptConfig};
@@ -34,6 +32,7 @@ use inference_engine_rust::prefill::{
 };
 use inference_engine_rust::sampling::sample_greedy;
 use inference_engine_rust::tokenizer::Tokenizer;
+use inference_engine_rust::EngineError;
 
 #[derive(Parser, Debug)]
 #[command(name = "chat")]
@@ -174,17 +173,10 @@ fn main() -> Result<(), EngineError> {
             let mut stop_on_gemma_structure = false;
             if stream {
                 let full = tokenizer.decode_piece_ids(&generated)?;
-                let safe_raw = if matches!(style, ChatPromptStyle::Gemma4E2b) {
-                    gemma4_e2b_truncate_assistant_at_structure(&full)
+                let safe = if matches!(style, ChatPromptStyle::Gemma4E2b) {
+                    gemma4_e2b_assistant_visible(&full)
                 } else {
-                    full.as_str()
-                };
-                let safe: &str = if matches!(style, ChatPromptStyle::Gemma4E2b)
-                    && gemma4_e2b_decode_has_structure_marker(&full)
-                {
-                    gemma4_e2b_strip_dangling_contraction_tail(safe_raw)
-                } else {
-                    safe_raw
+                    full.trim_end().to_string()
                 };
                 if safe.starts_with(&decoded_prefix) {
                     print!("{}", &safe[decoded_prefix.len()..]);
@@ -194,8 +186,10 @@ fn main() -> Result<(), EngineError> {
                     print!("{}", piece);
                 }
                 std::io::stdout().flush().ok();
-                decoded_prefix = safe.to_string();
-                if matches!(style, ChatPromptStyle::Gemma4E2b) && safe_raw.len() < full.len() {
+                decoded_prefix = safe;
+                if matches!(style, ChatPromptStyle::Gemma4E2b)
+                    && gemma4_e2b_decode_has_structure_marker(&full)
+                {
                     stop_on_gemma_structure = true;
                 }
             } else if matches!(style, ChatPromptStyle::Gemma4E2b) {
