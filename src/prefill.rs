@@ -393,15 +393,35 @@ pub fn prefill_forward(
     weights: &ModelWeights,
     kv_caches: &mut [KVCache],
 ) -> Result<PrefillState, EngineError> {
+    prefill_forward_layers(input, config, weights, kv_caches, weights.layers.len())
+}
+
+/// Run the first `num_layers` transformer blocks (0 = embeddings only, `weights.layers.len()` = full prefill).
+pub fn prefill_forward_layers(
+    input: &PrefillState,
+    config: &ModelConfig,
+    weights: &ModelWeights,
+    kv_caches: &mut [KVCache],
+    num_layers: usize,
+) -> Result<PrefillState, EngineError> {
     if kv_caches.len() != weights.layers.len() {
         return Err(EngineError::Model(
             "prefill_forward: kv_caches len != number of layers".into(),
         ));
     }
+    if num_layers > weights.layers.len() {
+        return Err(EngineError::Model(format!(
+            "prefill_forward_layers: num_layers {num_layers} > n_layers {}",
+            weights.layers.len()
+        )));
+    }
 
     let mut state = input.replace_hidden(input.hidden().to_vec())?;
 
     for (layer_idx, layer_weights) in weights.layers.iter().enumerate() {
+        if layer_idx >= num_layers {
+            break;
+        }
         state = prefill_layer_block(&state, config, layer_idx, layer_weights, kv_caches)?;
     }
 

@@ -2,6 +2,7 @@
 //!
 //! ```text
 //! cargo test --test gemma_hidden_vs_llama gemma4_e2b_last_hidden_vs_llama --release -- --ignored --nocapture
+//! GEMMA_LOGITS_TOKEN_IDS=2 cargo test --test gemma_hidden_vs_llama gemma4_e2b_last_hidden_vs_llama --release -- --ignored --nocapture
 //! ```
 
 mod common;
@@ -98,16 +99,25 @@ fn gemma4_e2b_last_hidden_vs_llama() {
         ref_bin.display()
     );
 
-    let prompt = std::env::var("GEMMA_LOGITS_PROMPT").unwrap_or_else(|_| "Hello".to_string());
-    let mut tokenizer = Tokenizer::load_from_file(&tok_path).expect("tokenizer");
     let path_str = GEMMA4_E2B_Q8_GGUF_REL_PATH;
     let mut gguf = read_file(path_str).expect("read gguf");
     let tok_prompt = TokenizerPromptConfig::from_gguf(&gguf).expect("tok config");
-    let prompt_ids = tokenizer
-        .encode_with_prompt_config(&prompt, &tok_prompt)
-        .expect("encode");
+    let prompt_ids = if let Ok(s) = std::env::var("GEMMA_LOGITS_TOKEN_IDS") {
+        let mut out = Vec::new();
+        for part in s.split([',', ' ']).filter(|p| !p.is_empty()) {
+            out.push(part.parse().expect("GEMMA_LOGITS_TOKEN_IDS parse"));
+        }
+        assert!(!out.is_empty(), "GEMMA_LOGITS_TOKEN_IDS empty");
+        out
+    } else {
+        let mut tokenizer = Tokenizer::load_from_file(&tok_path).expect("tokenizer");
+        let prompt = std::env::var("GEMMA_LOGITS_PROMPT").unwrap_or_else(|_| "Hello".to_string());
+        tokenizer
+            .encode_with_prompt_config(&prompt, &tok_prompt)
+            .expect("encode")
+    };
 
-    eprintln!("prompt: {prompt:?} ids: {prompt_ids:?}");
+    eprintln!("prompt ids: {prompt_ids:?}");
 
     let ref_hidden = read_reference_hidden(&ref_bin, &model_path, &prompt_ids).expect("llama hidden");
 

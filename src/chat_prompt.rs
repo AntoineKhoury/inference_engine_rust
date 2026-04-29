@@ -11,11 +11,6 @@ pub const GEMMA4_E2B_ASSISTANT_STOP_MARKERS: &[&str] = &[
     "<turn|", // incomplete closer before final `>`
     "<|turn>", // new role header (hallucinated continuation)
     "<|turn",
-    "<channel|>",
-    "<|channel>",
-    "<|channel",
-    "<|think|>",
-    "<|think",
     "<|tool_call",
     "<|tool_response",
     "<|tool>",
@@ -25,6 +20,36 @@ pub const GEMMA4_E2B_ASSISTANT_STOP_MARKERS: &[&str] = &[
     "<|image",
     "<|video",
 ];
+
+/// Remove Gemma reasoning-channel blocks while keeping visible assistant text.
+///
+/// The model may emit: `<|channel>thought\n ... <channel|>` before the visible answer.
+/// Those blocks are structural, not assistant-visible content.
+pub fn gemma4_e2b_strip_thinking_blocks(s: &str) -> String {
+    const CH_START: &str = "<|channel>";
+    const CH_END: &str = "<channel|>";
+
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+
+    loop {
+        let Some(start) = rest.find(CH_START) else {
+            out.push_str(rest);
+            break;
+        };
+
+        out.push_str(&rest[..start]);
+        let after_start = &rest[start + CH_START.len()..];
+
+        // Incomplete thought block at the end: keep only text before it.
+        let Some(end_rel) = after_start.find(CH_END) else {
+            break;
+        };
+        rest = &after_start[end_rel + CH_END.len()..];
+    }
+
+    out
+}
 
 /// Cut `s` before the first Gemma E2B structure / modality marker (if any).
 pub fn gemma4_e2b_truncate_assistant_at_structure(s: &str) -> &str {
@@ -70,8 +95,9 @@ pub fn gemma4_e2b_strip_dangling_contraction_tail(s: &str) -> &str {
 
 /// Truncate at template markers, then tidy partial contractions **only if** a marker was present.
 pub fn gemma4_e2b_assistant_visible(s: &str) -> String {
-    let had_marker = gemma4_e2b_decode_has_structure_marker(s);
-    let t = gemma4_e2b_truncate_assistant_at_structure(s);
+    let no_think = gemma4_e2b_strip_thinking_blocks(s);
+    let had_marker = gemma4_e2b_decode_has_structure_marker(&no_think);
+    let t = gemma4_e2b_truncate_assistant_at_structure(&no_think);
     let t = if had_marker {
         gemma4_e2b_strip_dangling_contraction_tail(t)
     } else {
@@ -297,5 +323,20 @@ mod tests {
         // Mid-generation "I'll" has no apostrophe at end; if we ever had lone I' without marker, do not strip.
         let s = "Still typing I'";
         assert_eq!(gemma4_e2b_assistant_visible(s), s);
+    }
+
+    #[test]
+    fn gemma4_strip_thinking_block_preserves_answer() {
+        let s = "<|channel>thought\ninternal\n<channel|>Paris is the capital of France.";
+        assert_eq!(
+            gemma4_e2b_assistant_visible(s),
+            "Paris is the capital of France."
+        );
+    }
+
+    #[test]
+    fn gemma4_strip_incomplete_thinking_block() {
+        let s = "Visible prefix. <|channel>thought\nunfinished";
+        assert_eq!(gemma4_e2b_assistant_visible(s), "Visible prefix.");
     }
 }

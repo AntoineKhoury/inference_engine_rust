@@ -10,15 +10,15 @@ pub fn rmsnorm_inplace_no_scale(x: &mut [f32], epsilon: f32) {
     if dim == 0 {
         return;
     }
-    let mut sum_squared: f32 = 0.0;
+    // Match ggml: accumulate f32 products in f64, truncate mean to f32, scale in f32
+    let mut sum: f64 = 0.0;
     for &v in x.iter() {
-        sum_squared += v * v;
+        sum += (v * v) as f64;
     }
-    let rms = (sum_squared / dim as f32 + epsilon).sqrt();
-    if rms > 0.0 {
-        for z in x.iter_mut() {
-            *z /= rms;
-        }
+    let mean: f32 = (sum / dim as f64) as f32;
+    let scale: f32 = 1.0f32 / (mean + epsilon).sqrt();
+    for z in x.iter_mut() {
+        *z *= scale;
     }
 }
 
@@ -32,16 +32,17 @@ pub fn rmsnorm(
     #[cfg(debug_assertions)]
     debug_assert_eq!(input.len(), weights.len(), "Dimension missmatch for RMSNorm");
 
-    let mut sum_squared: f32 = 0.0;
+    let mut sum: f64 = 0.0;
     let dim: usize = input.len();
 
     for &x in input.iter() {
-        sum_squared += x.powi(2);
+        sum += (x * x) as f64;
     }
-    let mean_squared: f32 = sum_squared / (dim as f32);
-    let rms = (mean_squared + epsilon).sqrt();
+    // Match ggml: truncate mean to f32, compute scale in f32
+    let mean: f32 = (sum / dim as f64) as f32;
+    let scale: f32 = 1.0f32 / (mean + epsilon).sqrt();
     for ((out_slot, &x), &w) in output.iter_mut().zip(input.iter()).zip(weights.iter()) {
-        *out_slot = x * w / rms;
+        *out_slot = (x * scale) * w;
     }
     Ok(())
 }
