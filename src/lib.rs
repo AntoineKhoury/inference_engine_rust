@@ -5,6 +5,7 @@ pub use error::EngineError;
 pub mod bench_metrics;
 pub mod chat_prompt;
 pub mod core;
+pub mod generation;
 pub mod layers;
 pub mod loaded_model;
 pub mod model_config;

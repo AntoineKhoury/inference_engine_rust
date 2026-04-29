@@ -15,8 +15,8 @@ use inference_engine_rust::EngineError;
 use inference_engine_rust::chat_prompt::{
     ChatPromptStyle, gemma4_e2b_assistant_visible, gemma4_e2b_decode_has_structure_marker,
 };
+use inference_engine_rust::generation::greedy_next_token;
 use inference_engine_rust::loaded_model::LoadedModel;
-use inference_engine_rust::sampling::sample_greedy;
 use inference_engine_rust::session::InferenceSession;
 use inference_engine_rust::tokenizer::Tokenizer;
 
@@ -100,8 +100,7 @@ fn main() -> Result<(), EngineError> {
     let stop_id = tok_prompt.eos_token_id;
     let mut generated = Vec::with_capacity(args.new_tokens);
     for _ in 0..args.new_tokens {
-        let logits = session.logits_last_token(&state)?;
-        let next_id = sample_greedy(&logits)?;
+        let next_id = greedy_next_token(&session, &state)?;
         if next_id == stop_id {
             break;
         }
